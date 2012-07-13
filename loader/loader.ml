@@ -1,3 +1,4 @@
+(* vim: set tw=0 : *)
 open Printf
 open ExtLib
 
@@ -40,7 +41,7 @@ type elem = Wall | Rock | Lift | Earth | Empty | Lambda
 let initial_robot_coordinates = ref (0,0)
 
 type location =
-  { pos: coords
+  { coords: coords
   ; stuff: elem
 }
 
@@ -61,6 +62,7 @@ let load_char = function
   | 'R' -> Empty, true
   | 'L' -> Lift, false
   | 'O' -> Lift, false
+  | '0' -> Lambda, false
   | '*' -> Rock, false
   | '\\'-> Lambda, false
   | c -> failwithf "Unknown char %c" c
@@ -71,7 +73,7 @@ let char_of_elem = function
   | Empty -> " "
   | Lift -> "L"
   | Rock -> "*"
-  | Lambda -> "0"
+  | Lambda -> "λ"
 
 
 let load_line pos s (accum:location list) =
@@ -83,11 +85,11 @@ let load_line pos s (accum:location list) =
       let rest =  ps ^+ (1,0) $ loop in
       if robo then initial_robot_coordinates := ps;
       match elem with
-      | Wall -> { pos = ps; stuff = Wall } :: rest
-      | Rock -> { pos = ps; stuff = Rock } :: rest
-      | Lift -> { pos = ps; stuff = Lift } :: rest
-      | Earth -> { pos = ps; stuff = Earth } :: rest
-      | Lambda -> { pos = ps; stuff = Lambda } :: rest
+      | Wall -> { coords = ps; stuff = Wall } :: rest
+      | Rock -> { coords = ps; stuff = Rock } :: rest
+      | Lift -> { coords = ps; stuff = Lift } :: rest
+      | Earth -> { coords = ps; stuff = Earth } :: rest
+      | Lambda -> { coords = ps; stuff = Lambda } :: rest
       | Empty -> rest
     )
   in
@@ -96,7 +98,7 @@ let load_line pos s (accum:location list) =
 let get_dimensions =
   let rec loop max_x max_y = function
     | loc :: rest ->
-        let x, y = loc.pos in
+        let x, y = loc.coords in
         loop (max x max_x) (max y max_y) rest
      | _ -> max_x, max_y
   in
@@ -113,8 +115,8 @@ let load_field lines =
   in
   let loaded_field = loop (1, 1) lines in
   let dimensions = get_dimensions loaded_field in
-  { f = List.map 
-    (fun elem -> { elem with pos = invert_y dimensions elem.pos })
+  { f = List.map
+    (fun elem -> { elem with coords = invert_y dimensions elem.coords })
     loaded_field
   ; robot_alive = true
   ; dimensions = dimensions
@@ -124,14 +126,19 @@ let load_field lines =
 
 
 let print_field f =
+  (*
   log "Robot @ %s" & string_of_coords f.robot;
   log "Field dimensions: %s" & string_of_coords f.dimensions;
+  *)
   let w, h = f.dimensions in
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
+  List.iter (fun c -> printf "%s" c) (List.rev f.actions_so_far);
+  log ".";
+
   let rec loop n_elems = function
     | h::t ->
-      let hx, hy = h.pos in
+      let hx, hy = h.coords in
       repr.(hy).(hx) <- char_of_elem h.stuff;
       loop (succ n_elems) t;
     | _ -> n_elems
@@ -139,20 +146,21 @@ let print_field f =
 
   let rx, ry = f.robot in repr.(ry).(rx) <- "R";
 
-  let n_elems = loop 0 f.f in
+  ignore( loop 0 f.f );
   for j = 1 to h do
     for k = 1 to w do
       printf "%s%!" repr.(h - j + 1).(k);
     done;
     printf "\n";
   done;
-  log "%d elems" n_elems
+
+  log ""
 
 (* }}} *)
 
 let peek_location f l =
   let rec loop = function
-  | h::t -> if h.pos = l then Some h.stuff else loop t
+  | h::t -> if h.coords = l then Some h.stuff else loop t
   | _ -> None
   in loop f.f
 
@@ -162,14 +170,19 @@ let string_of_elem_at f l =
   | None -> " "
 
 
-let is_walkable field c =
+let rec is_walkable field direction c =
   match peek_location field c with
   | Some Wall  -> false
-  | Some Rock  -> false (* bork *)
+  | Some Rock  ->
+      (* rocks can be pushed? *)
+      if direction = "L" then
+        is_walkable field "X" (c ^- (1, 0))
+      else if direction = "R" then
+        is_walkable field "X" (c ^+ (1, 0))
+      else false
   | _ -> true
 
 
-  (*
 let do_action field action =
 
   let new_robo_coords = (match action with
@@ -180,31 +193,147 @@ let do_action field action =
   | "W" -> field.robot
   | s -> failwithf "Unknown robo-action %s" s
   ) in
-  ()
+  (* nevar paiet, stāvi uz vietas *)
+  let new_robo_coords = if not & is_walkable field action new_robo_coords then begin
+    log "Tried to move %s from %s but can't" action (string_of_coords new_robo_coords);
+    field.robot
+  end else new_robo_coords in
 
-*)
+  (* bork: fall on head? *)
+
+  let peek = peek_location field in
+
+  let rec loop = function
+    | loc::t ->
+        if loc.coords = new_robo_coords then (
+
+          (* robots uzkāpj uz zemes, zeme pazūd: skipojam cellu *)
+          if loc.stuff = Earth then loop t else
+
+          (* robots grūž akmeni *)
+          if loc.stuff = Rock then
+            let delta = (if action = "L" then (-1, 0) else (1, 0)) in
+            { loc with coords = loc.coords ^+ delta } :: t $ loop (* retry -- it may fall *)
+          else loc :: (loop t)
+
+        ) else (
+
+          if loc.stuff = Rock then begin
+            let c_bottom = loc.coords ^+ (+0, -1)
+            and c_left   = loc.coords ^+ (-1, +0)
+            and c_right  = loc.coords ^+ (+1, +0)
+            and c_bottom_left  = loc.coords ^+ (-1, -1)
+            and c_bottom_right = loc.coords ^+ (+1, -1)
+            in
+            if peek c_bottom = None then
+              (* akmens krīt lejā vertikāli *)
+              (* bork: var uzkrist uz robota galvas *)
+              { loc with coords = c_bottom } :: (loop t)
+            else
+            if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then
+                (* uz leju pa labi *)
+                { loc with coords = c_bottom_right } :: (loop t)
+            else
+            if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then
+                (* uz leju pa labi *)
+                { loc with coords = c_bottom_right } :: (loop t)
+            else
+            if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then
+              { loc with coords = c_bottom_left } :: (loop t)
+            else
+              loc :: (loop t)
+          end
+            else loc :: (loop t)
+        )
+    | _ -> []
+  in
+
+  { field with
+    f = loop (List.sort ~cmp:(fun a b -> let ax, ay = a.coords and bx, by = b.coords in if ay == by then ax - bx else ay - by) field.f);
+    actions_so_far = action :: field.actions_so_far;
+    robot = new_robo_coords;
+  }
+
+(* {{{ run_tests *)
 
 let run_tests () =
-  let f = load_field
-  [ "#*####"
-  ; "#R   #"
-  ; "######" ] in
 
-  let walk_test = is_walkable f
+  let print = false
+  and f = load_field
+  [ "#**###"
+  ; "#R*  #"
+  ; "# # ##"
+  ; "######"
+  ] in
+
+  let walk_test = is_walkable f " "
   and peek_test = peek_location f in
-  assert( not & walk_test (1,1) );
-  assert(       walk_test (2,2) );
-  assert( not & walk_test (3,3) );
-  assert( not & walk_test (3,3) );
-  assert( peek_test (2,2) = None );
-  assert( peek_test (1,3) = Some Wall );
-  assert( peek_test (2,3) = Some Rock );
+  assert( not & walk_test (1,2) );
+  assert(       walk_test (2,3) );
+  assert( not & walk_test (3,4) );
+  assert( peek_test (2,3) = None );
+  assert( peek_test (1,4) = Some Wall );
+  assert( peek_test (2,4) = Some Rock );
+
+  if print then print_field f;
+
+  let f = do_action f "W" in
+  assert( f.actions_so_far = ["W"] );
+  assert( f.robot = (2,3) );
+
+  if print then print_field f;
+
+  let f = do_action f "R" in
+  assert( f.actions_so_far = ["R"; "W"] );
+  assert( f.robot = (3,3) );
+
+  if print then print_field f;
+
+  let f = do_action f "R" in
+  assert( f.robot = (4,3) );
+
+  if print then print_field f;
+
+  let f = do_action f "W" in
+  assert( f.robot = (4,3) );
+
+  if print then print_field f;
+
+  let f = do_action f "L" in
+
+  if print then print_field f;
+  assert( f.robot = (3,3) );
+
+  (* bork: iterācija / akmeņi krīt no lejas *)
+
+  let print = true
+  and f = load_field
+  [ "#    ****     R"
+  ; "#    ****      "
+  ; "#    ****      "
+  ; "#    0000      "
+  ; "###############"
+  ] in
+
+  if print then print_field f;
+  let f = do_action f "W" in
+  if print then print_field f;
+  let f = do_action f "W" in
+  if print then print_field f;
+  let f = do_action f "W" in
+  if print then print_field f;
+  let f = do_action f "W" in
+  if print then print_field f;
+
+
 
   log "Tests passed"
+
+(* }}} *)
 
 
 
 let _ =
   run_tests ();
-  print_field & load_field & lines_of_file "../maps/contest1.map";
+  (* print_field & load_field & lines_of_file "../maps/contest1.map"; *)
   ()
