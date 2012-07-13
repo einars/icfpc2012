@@ -49,10 +49,17 @@ type field =
   { f: location list
   ; dimensions: coords
   ; score: int
+  ; lambdas: int
+  ; lambdas_eaten: int
   ; robot: coords
   ; robot_alive: bool
   ; actions_so_far: string list
   }
+
+let rec count_lambdas n = function
+  | loc::t ->
+      count_lambdas (if loc.stuff = Lambda then n + 1 else n) t
+  | _ -> n
 
 
 (* {{{ load/print field *)
@@ -68,11 +75,11 @@ let load_char = function
   | '\\'-> Lambda, false
   | c -> failwithf "Unknown char %c" c
 
-let char_of_elem = function
+let char_of_elem ?(lambdas = 1) = function
   | Wall -> "#"
   | Earth -> "."
   | Empty -> " "
-  | Lift -> "L"
+  | Lift -> if lambdas = 0 then "O" else "L"
   | Rock -> "*"
   | Lambda -> "λ"
 
@@ -121,6 +128,8 @@ let load_field lines =
     loaded_field
   ; robot_alive = true
   ; score = 0
+  ; lambdas = count_lambdas 0 loaded_field
+  ; lambdas_eaten = 0
   ; dimensions = dimensions
   ; robot = invert_y dimensions !initial_robot_coordinates
   ; actions_so_far = []
@@ -136,12 +145,12 @@ let print_field f =
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
   List.iter (fun c -> printf "%s" c) (List.rev f.actions_so_far);
-  log " score=%d" f.score;
+  log " score=%d eaten=%d (%d rem)" f.score f.lambdas_eaten f.lambdas;
 
   let rec loop n_elems = function
     | h::t ->
       let hx, hy = h.coords in
-      repr.(hy).(hx) <- char_of_elem h.stuff;
+      repr.(hy).(hx) <- char_of_elem ~lambdas:f.lambdas h.stuff;
       loop (succ n_elems) t;
     | _ -> n_elems
   in
@@ -175,6 +184,7 @@ let string_of_elem_at f l =
 let rec is_walkable field direction c =
   match peek_location field c with
   | Some Wall  -> false
+  | Some Lift  -> field.lambdas = 0
   | Some Rock  ->
       (* rocks can be pushed? *)
       if direction = "L" then
@@ -205,22 +215,32 @@ let do_action field action =
 
   let peek = peek_location field in
 
-  let (>>>) elem a = let l,n = a in ((elem::l), n) in
+  let score_diff, lambda_diff =
+  match peek new_robo_coords with
+  | Some Earth -> -1, 0
+  | Some Lambda -> 24, 1
+  | Some Lift -> 50 * field.lambdas_eaten - 1, 0
+  | _ -> -1, 0
+  in
 
-  let rec loop score = function
+  let rec loop = function
     | loc::t ->
         if loc.coords = new_robo_coords then (
 
           (* robots uzkāpj uz zemes, zeme pazūd: skipojam cellu *)
-          if loc.stuff = Earth then loop score t else
+          if loc.stuff = Earth then loop t else
 
-          if loc.stuff = Lambda then loop 25 t else
+          (* robots apēd lambdu *)
+          if loc.stuff = Lambda then loop t else
+
+          (* bork: robots iekāpj liftā *)
+          if loc.stuff = Lift then loop t else
 
           (* robots grūž akmeni *)
           if loc.stuff = Rock then
             let delta = (if action = "L" then (-1, 0) else (1, 0)) in
-            { loc with coords = loc.coords ^+ delta } :: t $ loop score (* retry -- it may fall *)
-          else loc >>> (loop score t)
+            { loc with coords = loc.coords ^+ delta } :: t $ loop (* retry -- it may fall *)
+          else loc :: (loop t)
 
         ) else (
 
@@ -234,34 +254,33 @@ let do_action field action =
             if peek c_bottom = None && c_bottom <> new_robo_coords then
               (* akmens krīt lejā vertikāli *)
               (* bork: var uzkrist uz robota galvas *)
-              { loc with coords = c_bottom } >>> (loop score t)
+              { loc with coords = c_bottom } :: (loop t)
             else
             if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then
                 (* uz leju pa labi *)
-                { loc with coords = c_bottom_right } >>> (loop score t)
+                { loc with coords = c_bottom_right } :: (loop t)
             else
             if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then
                 (* uz leju pa labi *)
-                { loc with coords = c_bottom_right } >>> (loop score t)
+                { loc with coords = c_bottom_right } :: (loop t)
             else
             if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then
-              { loc with coords = c_bottom_left } >>> (loop score t)
+              { loc with coords = c_bottom_left } :: (loop t)
             else
-              loc >>> (loop score t)
+              loc :: (loop t)
           end
-            else loc >>> (loop score t)
+            else loc :: (loop t)
         )
-    | _ -> [], score
+    | _ -> []
   in
 
-  (* bork: lifts *)
-
-
-  let nf, new_score = loop 0 (List.sort ~cmp:(fun a b -> let ax, ay = a.coords and bx, by = b.coords in if ay == by then ax - bx else ay - by) field.f) in
+  let nf = loop (List.sort ~cmp:(fun a b -> let ax, ay = a.coords and bx, by = b.coords in if ay == by then ax - bx else ay - by) field.f) in
   { field with
     f = nf;
-    score = field.score + (if new_score = 0 then -1 else new_score);
+    score = field.score + score_diff;
     actions_so_far = action :: field.actions_so_far;
+    lambdas = count_lambdas 0 nf;
+    lambdas_eaten = field.lambdas_eaten + lambda_diff;
     robot = new_robo_coords;
   }
 
@@ -269,17 +288,17 @@ let do_action field action =
 
 let run_tests () =
 
-  let rec waffle cmds f =
+  let waffle ?(print=true) cmds f =
     let grr = ref f in
-    print_field !grr;
-    for i = 1 to pred & String.length cmds do
+    if print then print_field !grr;
+    for i = 0 to pred & String.length cmds do
       grr := do_action !grr (String.get cmds i $ Std.string_of_char);
-      print_field !grr;
+      if print then print_field !grr;
     done;
     !grr
   in
 
-  let print = true
+  let print = false
   and f = load_field
   [ "#**#L#"
   ; "#R* 0#"
@@ -329,23 +348,27 @@ let run_tests () =
   let f = do_action f "R" in
   if print then print_field f;
 
-  if false then (
-  let _ = waffle "WWWWW" &
+  let f = do_action f "U" in
+  if print then print_field f;
+
+  ignore(waffle ~print:false "WWWWW" &
   load_field
   [ "#    ****     R"
   ; "#    ****      "
   ; "#    ****      "
   ; "#    0000      "
   ; "###############"
-  ] in ());
+  ]);
 
-  if false then (
-  let _ = waffle "WW" &
-  load_field
-  [ "#* *#"
-  ; "#* *# R"
-  ; "###############"
-  ] in ());
+  let f = waffle ~print:false "LDRDDUULLLDDL" & load_field & lines_of_file "../maps/contest1.map" in
+  assert (f.score = 212);
+  let f = waffle ~print:false "RRUDRRULURULLLLDDDL" & load_field & lines_of_file "../maps/contest2.map" in
+  assert (f.score = 281);
+  let f = waffle ~print:false "LDDDRRRRDDLLLLLDURRRUURRR" & load_field & lines_of_file "../maps/contest3.map" in
+  assert (f.score = 275);
+
+
+
 
   log "Tests passed"
 
