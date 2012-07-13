@@ -1,4 +1,3 @@
-
 open Printf
 open ExtLib
 
@@ -18,9 +17,12 @@ let lines_of_file = Std.input_list << open_in
 type coords = int * int
 
 let (^+) c1 c2 =
-  let x1, y1 = c1
-  and x2, y2 = c2
+  let x1, y1 = c1 and x2, y2 = c2
   in (x1 + x2), (y1 + y2)
+
+let (^-) c1 c2 =
+  let x1, y1 = c1 and x2, y2 = c2
+  in (x1 - x2), (y1 - y2)
 
 let string_of_coords c = sprintf "%d:%d" (fst c) (snd c)
 
@@ -37,7 +39,6 @@ type elem = Wall | Rock | Lift | Earth | Empty | Lambda
 
 let initial_robot_coordinates = ref (0,0)
 
-
 type location =
   { pos: coords
   ; stuff: elem
@@ -47,8 +48,12 @@ type field =
   { f: location list
   ; dimensions: coords
   ; robot: coords
+  ; robot_alive: bool
+  ; actions_so_far: string list
   }
 
+
+(* {{{ load/print field *)
 let load_char = function
   | '#' -> Wall, false
   | '.' -> Earth, false
@@ -67,6 +72,7 @@ let char_of_elem = function
   | Lift -> "L"
   | Rock -> "*"
   | Lambda -> "0"
+
 
 let load_line pos s (accum:location list) =
   let rec loop ps =
@@ -96,15 +102,24 @@ let get_dimensions =
   in
   loop 0 0
 
+let invert_y dimensions pos =
+  let _, h = dimensions and x, y = pos in
+  x, h - y + 1
+
 let load_field lines =
   let rec loop pos = function
     | line::rest -> load_line pos line ( loop (pos ^+ (0,1) ) rest )
     | _ -> []
   in
   let loaded_field = loop (1, 1) lines in
-  { f = loaded_field
-  ; dimensions = get_dimensions loaded_field
-  ; robot = !initial_robot_coordinates
+  let dimensions = get_dimensions loaded_field in
+  { f = List.map 
+    (fun elem -> { elem with pos = invert_y dimensions elem.pos })
+    loaded_field
+  ; robot_alive = true
+  ; dimensions = dimensions
+  ; robot = invert_y dimensions !initial_robot_coordinates
+  ; actions_so_far = []
   }
 
 
@@ -127,12 +142,69 @@ let print_field f =
   let n_elems = loop 0 f.f in
   for j = 1 to h do
     for k = 1 to w do
-      printf "%s%!" repr.(j).(k);
+      printf "%s%!" repr.(h - j + 1).(k);
     done;
     printf "\n";
   done;
   log "%d elems" n_elems
 
+(* }}} *)
+
+let peek_location f l =
+  let rec loop = function
+  | h::t -> if h.pos = l then Some h.stuff else loop t
+  | _ -> None
+  in loop f.f
+
+let string_of_elem_at f l =
+  match peek_location f l with
+  | Some l -> char_of_elem l
+  | None -> " "
+
+
+let is_walkable field c =
+  match peek_location field c with
+  | Some Wall  -> false
+  | Some Rock  -> false (* bork *)
+  | _ -> true
+
+
+  (*
+let do_action field action =
+
+  let new_robo_coords = (match action with
+  | "L" -> field.robot ^+ (-1,0)
+  | "R" -> field.robot ^+ (+1,0)
+  | "U" -> field.robot ^+ (0,1)
+  | "D" -> field.robot ^+ (0,-1)
+  | "W" -> field.robot
+  | s -> failwithf "Unknown robo-action %s" s
+  ) in
+  ()
+
+*)
+
+let run_tests () =
+  let f = load_field
+  [ "#*####"
+  ; "#R   #"
+  ; "######" ] in
+
+  let walk_test = is_walkable f
+  and peek_test = peek_location f in
+  assert( not & walk_test (1,1) );
+  assert(       walk_test (2,2) );
+  assert( not & walk_test (3,3) );
+  assert( not & walk_test (3,3) );
+  assert( peek_test (2,2) = None );
+  assert( peek_test (1,3) = Some Wall );
+  assert( peek_test (2,3) = Some Rock );
+
+  log "Tests passed"
+
+
+
 let _ =
+  run_tests ();
   print_field & load_field & lines_of_file "../maps/contest1.map";
   ()
