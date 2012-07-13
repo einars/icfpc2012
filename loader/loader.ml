@@ -48,6 +48,7 @@ type location =
 type field =
   { f: location list
   ; dimensions: coords
+  ; score: int
   ; robot: coords
   ; robot_alive: bool
   ; actions_so_far: string list
@@ -119,6 +120,7 @@ let load_field lines =
     (fun elem -> { elem with coords = invert_y dimensions elem.coords })
     loaded_field
   ; robot_alive = true
+  ; score = 0
   ; dimensions = dimensions
   ; robot = invert_y dimensions !initial_robot_coordinates
   ; actions_so_far = []
@@ -134,7 +136,7 @@ let print_field f =
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
   List.iter (fun c -> printf "%s" c) (List.rev f.actions_so_far);
-  log ".";
+  log " score=%d" f.score;
 
   let rec loop n_elems = function
     | h::t ->
@@ -203,18 +205,22 @@ let do_action field action =
 
   let peek = peek_location field in
 
-  let rec loop = function
+  let (>>>) elem a = let l,n = a in ((elem::l), n) in
+
+  let rec loop score = function
     | loc::t ->
         if loc.coords = new_robo_coords then (
 
           (* robots uzkāpj uz zemes, zeme pazūd: skipojam cellu *)
-          if loc.stuff = Earth then loop t else
+          if loc.stuff = Earth then loop score t else
+
+          if loc.stuff = Lambda then loop 25 t else
 
           (* robots grūž akmeni *)
           if loc.stuff = Rock then
             let delta = (if action = "L" then (-1, 0) else (1, 0)) in
-            { loc with coords = loc.coords ^+ delta } :: t $ loop (* retry -- it may fall *)
-          else loc :: (loop t)
+            { loc with coords = loc.coords ^+ delta } :: t $ loop score (* retry -- it may fall *)
+          else loc >>> (loop score t)
 
         ) else (
 
@@ -225,31 +231,36 @@ let do_action field action =
             and c_bottom_left  = loc.coords ^+ (-1, -1)
             and c_bottom_right = loc.coords ^+ (+1, -1)
             in
-            if peek c_bottom = None then
+            if peek c_bottom = None && c_bottom <> new_robo_coords then
               (* akmens krīt lejā vertikāli *)
               (* bork: var uzkrist uz robota galvas *)
-              { loc with coords = c_bottom } :: (loop t)
+              { loc with coords = c_bottom } >>> (loop score t)
             else
             if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then
                 (* uz leju pa labi *)
-                { loc with coords = c_bottom_right } :: (loop t)
+                { loc with coords = c_bottom_right } >>> (loop score t)
             else
             if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then
                 (* uz leju pa labi *)
-                { loc with coords = c_bottom_right } :: (loop t)
+                { loc with coords = c_bottom_right } >>> (loop score t)
             else
             if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then
-              { loc with coords = c_bottom_left } :: (loop t)
+              { loc with coords = c_bottom_left } >>> (loop score t)
             else
-              loc :: (loop t)
+              loc >>> (loop score t)
           end
-            else loc :: (loop t)
+            else loc >>> (loop score t)
         )
-    | _ -> []
+    | _ -> [], score
   in
 
+  (* bork: lifts *)
+
+
+  let nf, new_score = loop 0 (List.sort ~cmp:(fun a b -> let ax, ay = a.coords and bx, by = b.coords in if ay == by then ax - bx else ay - by) field.f) in
   { field with
-    f = loop (List.sort ~cmp:(fun a b -> let ax, ay = a.coords and bx, by = b.coords in if ay == by then ax - bx else ay - by) field.f);
+    f = nf;
+    score = field.score + (if new_score = 0 then -1 else new_score);
     actions_so_far = action :: field.actions_so_far;
     robot = new_robo_coords;
   }
@@ -258,10 +269,20 @@ let do_action field action =
 
 let run_tests () =
 
-  let print = false
+  let rec waffle cmds f =
+    let grr = ref f in
+    print_field !grr;
+    for i = 1 to pred & String.length cmds do
+      grr := do_action !grr (String.get cmds i $ Std.string_of_char);
+      print_field !grr;
+    done;
+    !grr
+  in
+
+  let print = true
   and f = load_field
-  [ "#**###"
-  ; "#R*  #"
+  [ "#**#L#"
+  ; "#R* 0#"
   ; "# # ##"
   ; "######"
   ] in
@@ -300,32 +321,31 @@ let run_tests () =
   if print then print_field f;
 
   let f = do_action f "L" in
-
   if print then print_field f;
   assert( f.robot = (3,3) );
 
-  (* bork: iterācija / akmeņi krīt no lejas *)
+  let f = do_action f "R" in
+  if print then print_field f;
+  let f = do_action f "R" in
+  if print then print_field f;
 
-  let print = true
-  and f = load_field
+  if false then (
+  let _ = waffle "WWWWW" &
+  load_field
   [ "#    ****     R"
   ; "#    ****      "
   ; "#    ****      "
   ; "#    0000      "
   ; "###############"
-  ] in
+  ] in ());
 
-  if print then print_field f;
-  let f = do_action f "W" in
-  if print then print_field f;
-  let f = do_action f "W" in
-  if print then print_field f;
-  let f = do_action f "W" in
-  if print then print_field f;
-  let f = do_action f "W" in
-  if print then print_field f;
-
-
+  if false then (
+  let _ = waffle "WW" &
+  load_field
+  [ "#* *#"
+  ; "#* *# R"
+  ; "###############"
+  ] in ());
 
   log "Tests passed"
 
