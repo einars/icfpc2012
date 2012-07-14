@@ -125,9 +125,9 @@ let invert_y dimensions pos =
 let parse_metadata lines =
   let rec loop water flooding waterproof = function
     | l :: rest -> let k, v = String.split (String.strip l) " " in
-    if k = "Flooding" then loop water (String.to_int v) waterproof rest
+    if k = "Flooding"        then loop water (String.to_int v) waterproof rest
     else if k = "Waterproof" then loop water flooding (String.to_int v) rest
-    else if k = "Water"      then loop (String.to_int v) flooding water rest
+    else if k = "Water"      then loop (String.to_int v) flooding waterproof rest
     else failwithf "Unknown metadata key %s" k
   | _ -> water, flooding, waterproof
   in loop 0 0 10 lines
@@ -180,7 +180,7 @@ let print_field f =
   printf "\x1b[2J\x1b[;H";
 
   List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
-  log "\nscore=%d eaten=%d/%d\nwater=%d/%d wetness=%d/%d" f.score f.lambdas_eaten (f.lambdas_eaten + f.lambdas) f.water f.cur_water f.cur_wetness f.waterproof;
+  log "\nscore=%d eaten=%d/%d\nwater=%d/%d flooding=%d wetness=%d/%d" f.score f.lambdas_eaten (f.lambdas_eaten + f.lambdas) f.water f.cur_water f.flooding f.cur_wetness f.waterproof;
 
   let rx, ry = f.robot in repr.(ry).(rx) <- "R";
 
@@ -248,7 +248,7 @@ exception Bork_no_backtrack_hack
 
 exception Finished of int
 
-let exec_action field ?(backtrack=true) action =
+let exec_action field ?(backtrack=true) ?(allow_unwalkable=false) action =
 
   if field.is_complete then raise Bork_finished;
 
@@ -265,7 +265,10 @@ let exec_action field ?(backtrack=true) action =
 
   let new_robo_coords = update_robot field.robot action in
   (* nevar paiet, stāvi uz vietas *)
-  if not & is_walkable field action new_robo_coords then raise Bork_unwalkable;
+  let new_robo_coords =
+  if not & is_walkable field action new_robo_coords then (
+    if allow_unwalkable then field.robot else raise Bork_unwalkable;
+  ) else new_robo_coords in
 
   let peek = peek_location ~robot:new_robo_coords field in
 
@@ -348,7 +351,9 @@ let exec_action field ?(backtrack=true) action =
   let water = if cur_water = 0 && field.flooding > 0 then field.water + 1 else field.water in
   let robo_y = snd new_robo_coords in
   let cur_wetness = if robo_y <= water then field.cur_wetness + 1 else 0 in
-  if cur_wetness > field.waterproof then raise Bork_drowned;
+  if cur_wetness > field.waterproof then (
+    raise Bork_drowned;
+  );
   (* if cur_wetness > 0 then log "Achievement achieved: got wet %d" cur_wetness; *)
 
   { field with
@@ -364,9 +369,9 @@ let exec_action field ?(backtrack=true) action =
     water = water;
   }
 
-let do_action field ?(backtrack=true) action = (
+let do_action field ?(backtrack=true) ?(allow_unwalkable=false) action = (
   try
-    exec_action field ~backtrack:backtrack action
+    exec_action field ~backtrack:backtrack ~allow_unwalkable:allow_unwalkable action
   with
     | Finished total_score-> { field with
         is_complete = true;
@@ -379,7 +384,7 @@ let animate_solution field winning_moves =
   let exploded_moves = String.explode winning_moves $ List.map String.of_char $ List.rev in
   List.fold_right
       (fun action field ->
-        let nf = do_action field action in
+        let nf = do_action field ~allow_unwalkable:true action in
         ignore(Unix.select [] [] [] 0.1);
         print_field nf;
         nf
@@ -387,7 +392,7 @@ let animate_solution field winning_moves =
 
 let apply_solution field some_moves =
   let exploded_moves = String.explode some_moves $ List.map String.of_char $ List.rev in
-  List.fold_right (fun action field -> do_action field action) exploded_moves field
+  List.fold_right (fun action field -> do_action ~allow_unwalkable:true field action) exploded_moves field
 
 let manhattan_distance (ax, ay) (bx, by) = (1 + bx - ax $ abs) + (1 + by - ay $ abs)
 
@@ -500,7 +505,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
 (* {{{ torture / scoring *)
 
 let torture_chambers =
-  [ "/home/w/projekti/icfp12/maps/contest1.map", 212
+  [(* "/home/w/projekti/icfp12/maps/contest1.map", 212
   ; "/home/w/projekti/icfp12/maps/contest2.map", 281
   ; "/home/w/projekti/icfp12/maps/contest3.map", 275
   ; "/home/w/projekti/icfp12/maps/contest4.map", 575
@@ -510,7 +515,8 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
   ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
   ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
-  ; "/home/w/projekti/icfp12/maps/flood1.map", 945
+  *)
+  "/home/w/projekti/icfp12/maps/flood1.map", 945
   ; "/home/w/projekti/icfp12/maps/flood2.map", 281
   ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
   ; "/home/w/projekti/icfp12/maps/flood4.map", 1592
@@ -535,7 +541,6 @@ let self_torture map_file =
 
 let alien_torture executable map_file =
   let syscall cmd =
-    log "syscall %s" cmd;
     let ic, oc = Unix.open_process cmd in
     let buf = Buffer.create 16 in
     (try
@@ -546,7 +551,7 @@ let alien_torture executable map_file =
     let _ = Unix.close_process (ic, oc) in
     (Buffer.contents buf)
 in
-    sprintf "%s <%s" executable map_file $ syscall $ String.strip
+    sprintf "%s %s" executable map_file $ syscall $ String.strip
 
 
 (* }}} *)
