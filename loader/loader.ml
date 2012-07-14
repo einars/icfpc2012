@@ -244,8 +244,6 @@ exception Bork_fallen_rock
 exception Bork_finished
 exception Bork_drowned
 
-exception Bork_no_backtrack_hack
-
 exception Finished of int
 
 let exec_action field ?(backtrack=true) ?(allow_unwalkable=false) action =
@@ -253,15 +251,6 @@ let exec_action field ?(backtrack=true) ?(allow_unwalkable=false) action =
   if field.is_complete then raise Bork_finished;
 
   if action = "A" then raise (Finished field.score);
-
-  if not backtrack && field.moves_taken <> [] then (
-    let last_action = List.hd field.moves_taken in
-    let subsub = update_robot field.robot last_action in
-    if last_action = "R" && action = "L" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
-    if last_action = "L" && action = "R" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
-    if last_action = "U" && action = "D" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
-    if last_action = "D" && action = "U" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
-  );
 
   let new_robo_coords = update_robot field.robot action in
   (* nevar paiet, stāvi uz vietas *)
@@ -406,7 +395,7 @@ let get_lambdas f =
 
 let rockability_score f =
   let height = snd f.dimensions in
-  List.fold_left (fun sum (rock_x, rock_y) -> sum - rock_x - rock_y * height) 0 (get_rocks f)
+  List.fold_left (fun sum (rock_x, rock_y) -> sum - rock_y * height) 0 (get_rocks f)
 
 let lambda_manhattan_score f =
   + (rockability_score f) / 4
@@ -434,14 +423,13 @@ let solve ?(quiet=false) ?(use_signals=true) f =
       ) else (
         0
       )
-    and allow_backtrack = true
     in
     if ff.solver_touched $ not then (
       let res =
-      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "U") with _ -> 0) +
-      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "D") with _ -> 0) +
-      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "L") with _ -> 0) +
-      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "R") with _ -> 0)
+      (try ( astar_put_score & do_action ff "U") with _ -> 0) +
+      (try ( astar_put_score & do_action ff "D") with _ -> 0) +
+      (try ( astar_put_score & do_action ff "L") with _ -> 0) +
+      (try ( astar_put_score & do_action ff "R") with _ -> 0)
       in
       ff.solver_touched <- true;
       res
@@ -505,7 +493,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
 (* {{{ torture / scoring *)
 
 let torture_chambers =
-  [(* "/home/w/projekti/icfp12/maps/contest1.map", 212
+  [ "/home/w/projekti/icfp12/maps/contest1.map", 212
   ; "/home/w/projekti/icfp12/maps/contest2.map", 281
   ; "/home/w/projekti/icfp12/maps/contest3.map", 275
   ; "/home/w/projekti/icfp12/maps/contest4.map", 575
@@ -515,8 +503,7 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
   ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
   ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
-  *)
-  "/home/w/projekti/icfp12/maps/flood1.map", 945
+  ; "/home/w/projekti/icfp12/maps/flood1.map", 945
   ; "/home/w/projekti/icfp12/maps/flood2.map", 281
   ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
   ; "/home/w/projekti/icfp12/maps/flood4.map", 1592
