@@ -52,6 +52,15 @@ type field =
   ; robot: coords
   ; is_complete: bool
   ; moves_taken: string list
+
+
+  ; water: int
+  ; flooding: int
+  ; waterproof: int
+
+  ; cur_wetness: int
+  ; cur_water: int
+
   }
 
 let rec count_lambdas f =
@@ -111,12 +120,31 @@ let invert_y dimensions pos =
   let _, h = dimensions and x, y = pos in
   x, h - y + 1
 
+let parse_metadata lines =
+  let rec loop water flooding waterproof = function
+    | l :: rest -> let k, v = String.split (String.strip l) " " in
+    if k = "Flooding" then loop water (String.to_int v) waterproof rest
+    else if k = "Waterproof" then loop water flooding (String.to_int v) rest
+    else if k = "Water"      then loop (String.to_int v) flooding water rest
+    else failwithf "Unknown metadata key %s" k
+  | _ -> water, flooding, waterproof
+  in loop 0 0 10 lines
+
+let split_lines lines =
+  let rec loop is_metadata field metadata = function
+  | "" :: t -> loop true field metadata t
+  | l :: t -> loop is_metadata (if is_metadata then field else l::field) (if is_metadata then l::metadata else metadata) t
+  | _ -> (List.rev field), metadata
+  in loop false [] [] lines
+
 let load_field lines =
   let rec loop pos = function
     | line::rest -> load_line pos line ( loop (pos ^+ (0,1) ) rest )
     | _ -> CoordMap.empty
   in
-  let loaded_field = loop (1, 1) lines in
+  let l_field, l_meta = split_lines lines in
+  let loaded_field = loop (1, 1) l_field in
+  let water, flooding, waterproof = parse_metadata l_meta in
   let dimensions = get_dimensions loaded_field in
   { f = CoordMap.fold
       (fun coords elem new_map -> CoordMap.add (invert_y dimensions coords) elem new_map)
@@ -129,6 +157,12 @@ let load_field lines =
   ; dimensions = dimensions
   ; robot = invert_y dimensions !initial_robot_coordinates
   ; moves_taken = []
+
+  ; waterproof = waterproof
+  ; flooding = flooding
+  ; water = water
+  ; cur_wetness = 0
+  ; cur_water = 0
   }
 
 
@@ -140,8 +174,10 @@ let print_field f =
   let w, h = f.dimensions in
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
+  printf "\x1b[2J\x1b[;H";
+
   List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
-  log " score=%d eaten=%d (%d rem)" f.score f.lambdas_eaten f.lambdas;
+  log "\nscore=%d eaten=%d/%d\nwater=%d/%d wetness=%d/%d" f.score f.lambdas_eaten (f.lambdas_eaten + f.lambdas) f.water f.cur_water f.cur_wetness f.waterproof;
 
   let rx, ry = f.robot in repr.(ry).(rx) <- "R";
 
@@ -149,10 +185,12 @@ let print_field f =
   CoordMap.iter (fun (x,y) elem -> repr.(y).(x) <- char_of_elem ~lambdas:f.lambdas elem) f.f;
 
   for j = 1 to h do
+    printf "%s" (if (h - j + 1 >= f.water) then " " else "~");
     for k = 1 to w do
-      printf "%s%!" repr.(h - j + 1).(k);
+      printf "%s" repr.(h - j + 1).(k);
     done;
-    printf "\n";
+    printf "%s" (if (h - j + 1 >= f.water) then " " else "~");
+    printf "\n%!";
   done;
 
   log ""
@@ -201,6 +239,7 @@ let update_robot coords = function
 exception Bork_unwalkable
 exception Bork_fallen_rock
 exception Bork_finished
+exception Bork_drowned
 
 exception Bork_no_backtrack_hack
 
@@ -210,14 +249,16 @@ let exec_action field ?(backtrack=true) action =
 
   if field.is_complete then raise Bork_finished;
 
-  if action = "A" then raise (Finished (field.score + 25 * field.lambdas_eaten));
+  (* if action = "A" then raise (Finished (field.score + 25 * field.lambdas_eaten)); *)
+  if action = "A" then raise (Finished field.score);
 
   if not backtrack && field.moves_taken <> [] then (
     let last_action = List.hd field.moves_taken in
-    if last_action = "R" && action = "L" then raise Bork_no_backtrack_hack;
-    if last_action = "L" && action = "R" then raise Bork_no_backtrack_hack;
-    if last_action = "U" && action = "D" then raise Bork_no_backtrack_hack;
-    if last_action = "D" && action = "U" then raise Bork_no_backtrack_hack;
+    let subsub = update_robot field.robot last_action in
+    if last_action = "R" && action = "L" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
+    if last_action = "L" && action = "R" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
+    if last_action = "U" && action = "D" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
+    if last_action = "D" && action = "U" && is_walkable field "X" subsub then raise Bork_no_backtrack_hack;
   );
 
   let new_robo_coords = update_robot field.robot action in
@@ -229,7 +270,7 @@ let exec_action field ?(backtrack=true) action =
   let score_diff, lambda_diff =
   match peek_location field new_robo_coords with
   | Some Earth -> -1, 0
-  | Some Lambda -> 24, 1
+  | Some Lambda -> 49, 1
   (* | Some Lift -> 50 * field.lambdas_eaten - 1, 0 (* handled via internal raise Finished *)*)
   | _ -> -1, 0
   in
@@ -249,7 +290,8 @@ let exec_action field ?(backtrack=true) action =
 
       (* robots iekāpj liftā *)
       if loc = Lift then
-        raise (Finished (field.score + 50 * field.lambdas_eaten - 1))
+        (* XXX raise (Finished (field.score + 50 * field.lambdas_eaten - 1)) *)
+        raise (Finished (field.score + 25 * field.lambdas_eaten - 1))
       else
 
       (* robots grūž akmeni *)
@@ -300,6 +342,12 @@ let exec_action field ?(backtrack=true) action =
     field.f
     CoordMap.empty in
 
+  let cur_water = if field.cur_water + 1 > field.flooding then 0 else field.cur_water + 1 in
+  let water = if cur_water = 0 && field.flooding > 0 then field.water + 1 else field.water in
+  let robo_y = snd new_robo_coords in
+  let cur_wetness = if robo_y <= water then field.cur_wetness + 1 else 0 in
+  if cur_wetness > field.waterproof then raise Bork_drowned;
+  (* if cur_wetness > 0 then log "Achievement achieved: got wet %d" cur_wetness; *)
 
   { field with
     f = nf;
@@ -308,6 +356,10 @@ let exec_action field ?(backtrack=true) action =
     lambdas = count_lambdas nf;
     lambdas_eaten = field.lambdas_eaten + lambda_diff;
     robot = new_robo_coords;
+
+    cur_water = cur_water;
+    cur_wetness = cur_wetness;
+    water = water;
   }
 
 let do_action field ?(backtrack=true) action = (
@@ -326,7 +378,7 @@ let animate_solution field winning_moves =
   let rec loop cf = function
     | action::actions ->
         let nf = do_action cf action in
-        ignore(Unix.select [] [] [] 0.1);
+        ignore(Unix.select [] [] [] 0.2);
         print_field nf;
         loop nf actions
     | _ -> ()
@@ -443,7 +495,7 @@ let solve f =
   let astar = make_2d_array (h + 1) (w + 1) [] in
 
 
-  let tolerance = 30 in
+  let tolerance = 15 in
 
 
   let rec loop_astar tries =
@@ -455,13 +507,14 @@ let solve f =
       ) else (
         0
       )
+    and allow_backtrack = true
     in
     match tries with
     | h::t -> if h.is_complete $ not then (
-      (try ( astar_put_score & do_action h ~backtrack:true "U") with _ -> 0) +
-      (try ( astar_put_score & do_action h ~backtrack:true "D") with _ -> 0) +
-      (try ( astar_put_score & do_action h ~backtrack:true "L") with _ -> 0) +
-      (try ( astar_put_score & do_action h ~backtrack:true "R") with _ -> 0) (* +
+      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "U") with _ -> 0) +
+      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "D") with _ -> 0) +
+      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "L") with _ -> 0) +
+      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "R") with _ -> 0) (* +
       (try ( astar_put_score & do_action f "A") with _ -> 0) *) + loop_astar t
     ) else loop_astar t
     | _ -> 0
@@ -481,27 +534,6 @@ let solve f =
     done;
     if !had_modifications > 0 then process_frontier ()
   in
-
-    (*
-    new_frontier := [];
-    let rec loop_frontier = function
-      | f::t ->
-        if f.is_complete $ not then (
-        (try ( astar_put_score & do_action f "U") with _ -> ());
-        (try ( astar_put_score & do_action f "D") with _ -> ());
-        (try ( astar_put_score & do_action f "L") with _ -> ());
-        (try ( astar_put_score & do_action f "R") with _ -> ());
-        (try ( astar_put_score & do_action f "A") with _ -> ());
-        (* (try ( astar_put_score & do_action f "W") with _ -> () ); *)
-        );
-        (* if f.robot = (3,4) then print_field & do_action f "L"; *)
-        loop_frontier t
-      | _ -> ()
-    in
-    loop_frontier frontier;
-    let ff = !new_frontier in
-    if !new_frontier <> [] then process_frontier ff
-    *)
 
 
   Sys.set_signal Sys.sigint (Sys.Signal_handle (fun _ ->
@@ -545,7 +577,7 @@ let solve f =
 
 let _ =
 
-  run_tests ();
+  (* run_tests (); *)
 
   if Array.length Sys.argv = 1 then begin
 
