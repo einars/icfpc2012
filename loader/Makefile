@@ -4,7 +4,7 @@ PACKS = extlib
 RESULT = loader
 REALLY_QUIET = yes
 
-# TARGET:debug-code
+#TARGET:debug-code
 TARGET:native-code
 
 include OCamlMakefile
