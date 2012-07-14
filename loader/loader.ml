@@ -169,6 +169,11 @@ let print_field f =
 
 (* }}} *)
 
+let return_bestest_solution _ =
+  log "SIGINT, yeah! I will return the bestest of the solutions here, of course I will!";
+  exit 0
+
+
 let peek_location f l =
   let rec loop = function
   | h::t -> if h.coords = l then Some h.stuff else loop t
@@ -195,21 +200,22 @@ let rec is_walkable field direction c =
   | _ -> true
 
 
+let update_robot coords = function
+  | "L" -> coords ^+ (-1,0)
+  | "R" -> coords ^+ (+1,0)
+  | "U" -> coords ^+ (0,1)
+  | "D" -> coords ^+ (0,-1)
+  | "W" -> coords
+  | s -> failwithf "Unknown robo-action %s" s
+
+exception Bork_unwalkable
+exception Bork_fallen_rock
+
 let do_action field action =
 
-  let new_robo_coords = (match action with
-  | "L" -> field.robot ^+ (-1,0)
-  | "R" -> field.robot ^+ (+1,0)
-  | "U" -> field.robot ^+ (0,1)
-  | "D" -> field.robot ^+ (0,-1)
-  | "W" -> field.robot
-  | s -> failwithf "Unknown robo-action %s" s
-  ) in
+  let new_robo_coords = update_robot field.robot action in
   (* nevar paiet, stāvi uz vietas *)
-  let new_robo_coords = if not & is_walkable field action new_robo_coords then begin
-    log "Tried to move %s from %s but can't" action (string_of_coords new_robo_coords);
-    field.robot
-  end else new_robo_coords in
+  if not & is_walkable field action new_robo_coords then raise Bork_unwalkable;
 
   (* bork: fall on head? *)
 
@@ -251,22 +257,26 @@ let do_action field action =
             and c_bottom_left  = loc.coords ^+ (-1, -1)
             and c_bottom_right = loc.coords ^+ (+1, -1)
             in
-            if peek c_bottom = None && c_bottom <> new_robo_coords then
+            if peek c_bottom = None && c_bottom <> new_robo_coords then (
               (* akmens krīt lejā vertikāli *)
               (* bork: var uzkrist uz robota galvas *)
+              if new_robo_coords = loc.coords ^+ (+0, -2) then raise Bork_fallen_rock;
               { loc with coords = c_bottom } :: (loop t)
-            else
-            if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then
+            ) else
+            if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then (
                 (* uz leju pa labi *)
+                if new_robo_coords = loc.coords ^+ (+1, -2) then raise Bork_fallen_rock;
                 { loc with coords = c_bottom_right } :: (loop t)
-            else
-            if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then
+            ) else
+            if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then (
                 (* uz leju pa labi *)
+                if new_robo_coords = loc.coords ^+ (+1, -2) then raise Bork_fallen_rock;
                 { loc with coords = c_bottom_right } :: (loop t)
-            else
-            if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then
+            ) else
+            if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then (
+              if new_robo_coords = loc.coords ^+ (-1, -2) then raise Bork_fallen_rock;
               { loc with coords = c_bottom_left } :: (loop t)
-            else
+            ) else
               loc :: (loop t)
           end
             else loc :: (loop t)
@@ -375,8 +385,93 @@ let run_tests () =
 (* }}} *)
 
 
+let get_lambdas f =
+  let rec loop = function
+    | h::t -> let rest = loop t in if h.stuff = Lambda then h.coords :: rest else rest
+    | _ -> []
+  in loop f.f
+
+
+let solve f =
+
+  let h = (snd f.dimensions) and w = (fst f.dimensions) in
+
+  let astar = make_2d_array (h + 1) (w + 1) None in
+
+  let get_frontier c =
+    let x,y = c in match astar.(y).(x) with
+    | None -> failwithf "Oops %d %d" x y
+    | Some f -> f
+  in
+
+  let new_frontier = ref [] in
+
+  let astar_put_score new_field =
+    let x,y = new_field.robot in match astar.(y).(x) with
+    | None ->
+        astar.(y).(x) <- Some new_field;
+        new_frontier := new_field.robot :: !new_frontier;
+    | Some field ->
+        if field.score < new_field.score then (
+          astar.(y).(x) <- Some new_field;
+          new_frontier := new_field.robot :: !new_frontier;
+       )
+  in
+
+  let rec process_frontier frontier =
+    log "process_frontier";
+    for j = 1 to h do
+      for k = 1 to w do
+        match astar.(j).(k) with
+        | Some f -> printf "%d " f.score
+        | None -> printf "- "
+      done;
+      printf "\n%!";
+    done;
+    new_frontier := [];
+    let rec loop_frontier = function
+      | coords::t ->
+        let f = get_frontier coords in
+        (
+        (try ( astar_put_score & do_action f "U") with _ -> ());
+        (try ( astar_put_score & do_action f "D") with _ -> ());
+        (try ( astar_put_score & do_action f "L") with _ -> ());
+        (try ( astar_put_score & do_action f "R") with _ -> ());
+        (try ( astar_put_score & do_action f "W") with _ -> ());
+        );
+      | _ -> ()
+    in
+    loop_frontier frontier;
+    if !new_frontier <> [] then process_frontier !new_frontier
+  in
+
+  astar_put_score f;
+  process_frontier [ f.robot ];
+
+  let maximum = ref f in
+
+  for j = 1 to h do
+    for k = 1 to w do
+      match astar.(j).(k) with
+      | Some f -> if f.score > !maximum.score then maximum := f
+      | None -> ()
+    done
+  done;
+  !maximum
+
+
 
 let _ =
   run_tests ();
+
+  Sys.set_signal Sys.sigint (Sys.Signal_handle return_bestest_solution);
+
+  print_field & solve & load_field & lines_of_file "../maps/contest1.map";
+  (*
+  Unix.getpid () $ log "My pid is %d";
+  Unix.select [] [] [] 20.0;
+  *)
+
+
   (* print_field & load_field & lines_of_file "../maps/contest1.map"; *)
   ()

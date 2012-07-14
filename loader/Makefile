@@ -1,4 +1,5 @@
 SOURCES = loader.ml
+LIBS = unix
 PACKS = extlib
 RESULT = loader
 REALLY_QUIET = yes
