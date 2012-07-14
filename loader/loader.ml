@@ -252,7 +252,6 @@ let exec_action field ?(backtrack=true) action =
 
   if field.is_complete then raise Bork_finished;
 
-  (* if action = "A" then raise (Finished (field.score + 25 * field.lambdas_eaten)); *)
   if action = "A" then raise (Finished field.score);
 
   if not backtrack && field.moves_taken <> [] then (
@@ -405,9 +404,9 @@ let rockability_score f =
   List.fold_left (fun sum (rock_x, rock_y) -> sum - rock_x - rock_y * height) 0 (get_rocks f)
 
 let lambda_manhattan_score f =
-  + (rockability_score f) / 2
-  - 50 * f.lambdas * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
-  + 2 * f.score
+  + (rockability_score f) / 4
+  - 25 * f.lambdas * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
+  + 3 * f.score
 
 let scorer = lambda_manhattan_score
 
@@ -524,15 +523,31 @@ let torture torture_fn =
     let field = load_field & lines_of_file & map
     and solution = torture_fn map in
     let solved_field = apply_solution field solution in
-    log "%s: %4d of %4d" map solved_field.score best_possible_score;
+    log "%s: %3d%% %4d of %4d" map (solved_field.score * 100 / best_possible_score) solved_field.score best_possible_score;
     (tortured_total + solved_field.score, best_possible_total + best_possible_score)
   ) (0,0) torture_chambers in
-  log "TOTAL: %4d of %d" tortured_total best_possible_total
+  log "TOTAL: %4d of %d, %d%%" tortured_total best_possible_total (tortured_total * 100 / best_possible_total)
 
 
 
 let self_torture map_file =
-  solve ~quiet:true & load_field & lines_of_file & map_file
+  solve ~quiet:true ~use_signals:false & load_field & lines_of_file & map_file
+
+let alien_torture executable map_file =
+  let syscall cmd =
+    log "syscall %s" cmd;
+    let ic, oc = Unix.open_process cmd in
+    let buf = Buffer.create 16 in
+    (try
+      while true do
+        Buffer.add_channel buf ic 1
+      done
+    with End_of_file -> ());
+    let _ = Unix.close_process (ic, oc) in
+    (Buffer.contents buf)
+in
+    sprintf "%s <%s" executable map_file $ syscall $ String.strip
+
 
 (* }}} *)
 
@@ -572,9 +587,13 @@ let _ =
 
     ();
 
-  end else if Sys.argv.(1) = "torture" then begin
+  end else if Array.length Sys.argv = 2 && Sys.argv.(1) = "torture" then begin
 
-    torture self_torture;
+    self_torture $ torture;
+
+  end else if Array.length Sys.argv = 3 && Sys.argv.(1) = "torture" then begin
+
+    alien_torture Sys.argv.(2) $ torture
 
   end else if Array.length Sys.argv = 2 then begin
 
