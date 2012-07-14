@@ -17,6 +17,9 @@ let lines_of_file = Std.input_list << open_in
 
 type coords = int * int
 
+module CoordMap = Map.Make(struct type t = coords let compare = compare end)
+
+
 let (^+) c1 c2 =
   let x1, y1 = c1 and x2, y2 = c2
   in (x1 + x2), (y1 + y2)
@@ -36,7 +39,7 @@ let make_2d_array n m init =
 
 (* }}} *)
 
-type elem = Wall | Rock | Lift | Earth | Empty | Lambda
+type elem = Wall | Rock | Lift | Earth | Empty | Lambda | Robot
 
 let initial_robot_coordinates = ref (0,0)
 
@@ -45,6 +48,7 @@ type location =
   ; stuff: elem
 }
 
+
 type field =
   { f: location list
   ; dimensions: coords
@@ -52,8 +56,8 @@ type field =
   ; lambdas: int
   ; lambdas_eaten: int
   ; robot: coords
-  ; robot_alive: bool
-  ; actions_so_far: string list
+  ; is_complete: bool
+  ; moves_taken: string list
   }
 
 let rec count_lambdas n = function
@@ -76,12 +80,13 @@ let load_char = function
   | c -> failwithf "Unknown char %c" c
 
 let char_of_elem ?(lambdas = 1) = function
-  | Wall -> "#"
+  | Wall -> "▓"
   | Earth -> "."
   | Empty -> " "
   | Lift -> if lambdas = 0 then "O" else "L"
   | Rock -> "*"
   | Lambda -> "λ"
+  | Robot -> "E"
 
 
 let load_line pos s (accum:location list) =
@@ -98,6 +103,7 @@ let load_line pos s (accum:location list) =
       | Lift -> { coords = ps; stuff = Lift } :: rest
       | Earth -> { coords = ps; stuff = Earth } :: rest
       | Lambda -> { coords = ps; stuff = Lambda } :: rest
+      | Robot -> failwith "I certainly didn't expect Robot in response to load_char"
       | Empty -> rest
     )
   in
@@ -126,13 +132,13 @@ let load_field lines =
   { f = List.map
     (fun elem -> { elem with coords = invert_y dimensions elem.coords })
     loaded_field
-  ; robot_alive = true
+  ; is_complete = false
   ; score = 0
   ; lambdas = count_lambdas 0 loaded_field
   ; lambdas_eaten = 0
   ; dimensions = dimensions
   ; robot = invert_y dimensions !initial_robot_coordinates
-  ; actions_so_far = []
+  ; moves_taken = []
   }
 
 
@@ -144,7 +150,7 @@ let print_field f =
   let w, h = f.dimensions in
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
-  List.iter (fun c -> printf "%s" c) (List.rev f.actions_so_far);
+  List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
   log " score=%d eaten=%d (%d rem)" f.score f.lambdas_eaten f.lambdas;
 
   let rec loop n_elems = function
@@ -169,22 +175,24 @@ let print_field f =
 
 (* }}} *)
 
-let return_bestest_solution _ =
-  log "SIGINT, yeah! I will return the bestest of the solutions here, of course I will!";
-  exit 0
 
-
-let peek_location f l =
+let peek_location ?(robot=(-1,-1)) f l =
   let rec loop = function
   | h::t -> if h.coords = l then Some h.stuff else loop t
   | _ -> None
-  in loop f.f
+  in
+  if robot = l then Some Robot else loop f.f
 
 let string_of_elem_at f l =
   match peek_location f l with
   | Some l -> char_of_elem l
   | None -> " "
 
+
+let rec is_empty field c =
+  match peek_location field c with
+  | None | Some Empty -> true
+  | _ -> false
 
 let rec is_walkable field direction c =
   match peek_location field c with
@@ -193,14 +201,15 @@ let rec is_walkable field direction c =
   | Some Rock  ->
       (* rocks can be pushed? *)
       if direction = "L" then
-        is_walkable field "X" (c ^- (1, 0))
+        is_empty field (c ^- (1, 0))
       else if direction = "R" then
-        is_walkable field "X" (c ^+ (1, 0))
+        is_empty field (c ^+ (1, 0))
       else false
   | _ -> true
 
 
 let update_robot coords = function
+  | "A" -> coords
   | "L" -> coords ^+ (-1,0)
   | "R" -> coords ^+ (+1,0)
   | "U" -> coords ^+ (0,1)
@@ -210,24 +219,32 @@ let update_robot coords = function
 
 exception Bork_unwalkable
 exception Bork_fallen_rock
+exception Bork_finished
+exception Finished of int
 
-let do_action field action =
+let exec_action field action =
+
+  if field.is_complete then raise Bork_finished;
+
+  if action = "A" then raise (Finished (field.score + 25 * field.lambdas_eaten - 1));
 
   let new_robo_coords = update_robot field.robot action in
   (* nevar paiet, stāvi uz vietas *)
   if not & is_walkable field action new_robo_coords then raise Bork_unwalkable;
 
+
   (* bork: fall on head? *)
 
-  let peek = peek_location field in
+  let peek = peek_location ~robot:new_robo_coords field in
 
   let score_diff, lambda_diff =
-  match peek new_robo_coords with
+  match peek_location field new_robo_coords with
   | Some Earth -> -1, 0
   | Some Lambda -> 24, 1
-  | Some Lift -> 50 * field.lambdas_eaten - 1, 0
+  (* | Some Lift -> 50 * field.lambdas_eaten - 1, 0 (* handled via internal raise Finished *)*)
   | _ -> -1, 0
   in
+
 
   let rec loop = function
     | loc::t ->
@@ -239,8 +256,11 @@ let do_action field action =
           (* robots apēd lambdu *)
           if loc.stuff = Lambda then loop t else
 
-          (* bork: robots iekāpj liftā *)
-          if loc.stuff = Lift then loop t else
+          (* robots iekāpj liftā *)
+          if loc.stuff = Lift then (
+            (* raise Finished (score = field.score + 50 * field.lambdas_eaten - 1) *)
+            raise (Finished (field.score + 50 * field.lambdas_eaten - 1))
+          ) else
 
           (* robots grūž akmeni *)
           if loc.stuff = Rock then
@@ -288,11 +308,34 @@ let do_action field action =
   { field with
     f = nf;
     score = field.score + score_diff;
-    actions_so_far = action :: field.actions_so_far;
+    moves_taken = action :: field.moves_taken;
     lambdas = count_lambdas 0 nf;
     lambdas_eaten = field.lambdas_eaten + lambda_diff;
     robot = new_robo_coords;
   }
+
+let do_action field action = (
+  try
+    exec_action field action
+  with
+    | Finished total_score-> { field with
+        is_complete = true;
+        score = total_score;
+        moves_taken = action :: field.moves_taken;
+    }
+  )
+
+
+let animate_solution field winning_moves =
+  let rec loop cf = function
+    | action::actions ->
+        let nf = do_action cf action in
+        ignore(Unix.select [] [] [] 0.2);
+        print_field nf;
+        loop nf actions
+    | _ -> ()
+  in
+  List.rev winning_moves $ loop field
 
 (* {{{ run_tests *)
 
@@ -306,6 +349,7 @@ let run_tests () =
       if print then print_field !grr;
     done;
     !grr
+
   in
 
   let print = false
@@ -328,13 +372,13 @@ let run_tests () =
   if print then print_field f;
 
   let f = do_action f "W" in
-  assert( f.actions_so_far = ["W"] );
+  assert( f.moves_taken = ["W"] );
   assert( f.robot = (2,3) );
 
   if print then print_field f;
 
   let f = do_action f "R" in
-  assert( f.actions_so_far = ["R"; "W"] );
+  assert( f.moves_taken = ["R"; "W"] );
   assert( f.robot = (3,3) );
 
   if print then print_field f;
@@ -357,9 +401,15 @@ let run_tests () =
   if print then print_field f;
   let f = do_action f "R" in
   if print then print_field f;
+  assert (f.score = 18);
 
-  let f = do_action f "U" in
-  if print then print_field f;
+  let f_lift = do_action f "U" in
+  if print then print_field f_lift;
+  assert (f_lift.score = 18 + 50 - 1);
+
+  let f_abort = do_action f "A" in
+  if print then print_field f_abort;
+  assert (f_abort.score = 18 + 25 - 1);
 
   ignore(waffle ~print:false "WWWWW" &
   load_field
@@ -391,47 +441,41 @@ let get_lambdas f =
     | _ -> []
   in loop f.f
 
+let best n fs =
+  List.sort ~cmp:(fun a b -> - a.score + b.score) fs $ List.take n
+
 
 let solve f =
 
   let h = (snd f.dimensions) and w = (fst f.dimensions) in
 
-  let astar = make_2d_array (h + 1) (w + 1) None in
+  let astar = make_2d_array (h + 1) (w + 1) [] in
 
-  let get_frontier c =
-    let x,y = c in match astar.(y).(x) with
-    | None -> failwithf "Oops %d %d" x y
-    | Some f -> f
-  in
 
   let new_frontier = ref [] in
+  let search_depth = 3 in
 
   let astar_put_score new_field =
     let x,y = new_field.robot in match astar.(y).(x) with
-    | None ->
-        astar.(y).(x) <- Some new_field;
-        new_frontier := new_field.robot :: !new_frontier;
-    | Some field ->
-        if field.score < new_field.score then (
-          astar.(y).(x) <- Some new_field;
-          new_frontier := new_field.robot :: !new_frontier;
-       )
+    | [] ->
+        astar.(y).(x) <- [new_field];
+        new_frontier := new_field :: !new_frontier;
+    | fs ->
+        if List.length fs <= search_depth then (
+          astar.(y).(x) <- new_field :: fs;
+          new_frontier := new_field :: !new_frontier;
+        ) else
+          if List.exists (fun elem -> elem.score < new_field.score) fs then (
+            astar.(y).(x) <- best search_depth (new_field :: fs);
+            new_frontier := new_field :: !new_frontier;
+          )
   in
 
   let rec process_frontier frontier =
-    log "process_frontier";
-    for j = 1 to h do
-      for k = 1 to w do
-        match astar.(j).(k) with
-        | Some f -> printf "%d " f.score
-        | None -> printf "- "
-      done;
-      printf "\n%!";
-    done;
+    printf ".%![%d]" & List.length frontier;
     new_frontier := [];
     let rec loop_frontier = function
-      | coords::t ->
-        let f = get_frontier coords in
+      | f::t ->
         (
         (try ( astar_put_score & do_action f "U") with _ -> ());
         (try ( astar_put_score & do_action f "D") with _ -> ());
@@ -439,39 +483,54 @@ let solve f =
         (try ( astar_put_score & do_action f "R") with _ -> ());
         (try ( astar_put_score & do_action f "W") with _ -> ());
         );
+        loop_frontier t
       | _ -> ()
     in
     loop_frontier frontier;
     if !new_frontier <> [] then process_frontier !new_frontier
   in
 
+
+  Sys.set_signal Sys.sigint (Sys.Signal_handle (fun _ ->
+    let maximum = ref f in
+
+    for j = 1 to h do
+      for k = 1 to w do
+        match astar.(j).(k) with
+        | [] -> ()
+        | fs -> let f = List.hd & best 1 fs in
+            if f.score > !maximum.score then maximum := f
+      done
+    done;
+    animate_solution f ("A" :: !maximum.moves_taken);
+    exit 0;
+  ));
+
   astar_put_score f;
-  process_frontier [ f.robot ];
+  process_frontier [ f ];
+
+  Sys.set_signal Sys.sigint Sys.Signal_default;
 
   let maximum = ref f in
 
   for j = 1 to h do
     for k = 1 to w do
       match astar.(j).(k) with
-      | Some f -> if f.score > !maximum.score then maximum := f
-      | None -> ()
+      | [] -> ()
+      | fs -> let f = List.hd & best 1 fs in
+          if f.score > !maximum.score then maximum := f
     done
   done;
-  !maximum
+  if !maximum.is_complete 
+  then !maximum.moves_taken
+  else "A" :: !maximum.moves_taken
 
 
 
 let _ =
   run_tests ();
 
-  Sys.set_signal Sys.sigint (Sys.Signal_handle return_bestest_solution);
+  let initial_field = load_field & lines_of_file "../maps/contest6.map" in
+  solve initial_field $ animate_solution initial_field;
 
-  print_field & solve & load_field & lines_of_file "../maps/contest1.map";
-  (*
-  Unix.getpid () $ log "My pid is %d";
-  Unix.select [] [] [] 20.0;
-  *)
-
-
-  (* print_field & load_field & lines_of_file "../maps/contest1.map"; *)
   ()
