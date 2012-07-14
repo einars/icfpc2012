@@ -377,116 +377,20 @@ let do_action field ?(backtrack=true) action = (
   )
 
 let animate_solution field winning_moves =
+  let exploded_moves = String.explode winning_moves $ List.map String.of_char $ List.rev in
   List.fold_right
       (fun action field ->
         let nf = do_action field action in
         ignore(Unix.select [] [] [] 0.1);
         print_field nf;
         nf
-      ) winning_moves field $ ignore
+      ) exploded_moves field $ ignore
 
-(* {{{ run_tests *)
-
-let run_tests () =
-
-  let waffle ?(print=true) cmds f =
-    let grr = ref f in
-    if print then print_field !grr;
-    for i = 0 to pred & String.length cmds do
-      grr := do_action !grr (String.get cmds i $ Std.string_of_char);
-      if print then print_field !grr;
-    done;
-    !grr
-
-  in
-
-  let print = false
-  and f = load_field
-  [ "#**#L#"
-  ; "#R* 0#"
-  ; "# # ##"
-  ; "######"
-  ] in
-
-  let walk_test = is_walkable f " "
-  and peek_test = peek_location f in
-  assert( not & walk_test (1,2) );
-  assert(       walk_test (2,3) );
-  assert( not & walk_test (3,4) );
-  assert( peek_test (2,3) = None );
-  assert( peek_test (1,4) = Some Wall );
-  assert( peek_test (2,4) = Some Rock );
-
-  if print then print_field f;
-
-  let f = do_action f "W" in
-  assert( f.moves_taken = ["W"] );
-  assert( f.robot = (2,3) );
-
-  if print then print_field f;
-
-  let f = do_action f "R" in
-  assert( f.moves_taken = ["R"; "W"] );
-  assert( f.robot = (3,3) );
-
-  if print then print_field f;
-
-  let f = do_action f "R" in
-  assert( f.robot = (4,3) );
-
-  if print then print_field f;
-
-  let f = do_action f "W" in
-  assert( f.robot = (4,3) );
-
-  if print then print_field f;
-
-  let f = do_action f "L" in
-  if print then print_field f;
-  assert( f.robot = (3,3) );
-
-  let f = do_action f "R" in
-  if print then print_field f;
-  let f = do_action f "R" in
-  if print then print_field f;
-  assert (f.score = 18);
-
-  let f_lift = do_action f "U" in
-  if print then print_field f_lift;
-  assert (f_lift.score = 18 + 50 - 1);
-
-  let f_abort = do_action f "A" in
-  if print then print_field f_abort;
-  assert (f_abort.score = 18 + 25);
-
-  ignore(waffle ~print:false "WWWWW" &
-  load_field
-  [ "#    ****     R"
-  ; "#    ****      "
-  ; "#    ****      "
-  ; "#    0000      "
-  ; "###############"
-  ]);
-
-  let f = waffle ~print:false "LDRDDUULLLDDL" & load_field & lines_of_file "../maps/contest1.map" in
-  assert (f.score = 212);
-  let f = waffle ~print:false "RRUDRRULURULLLLDDDL" & load_field & lines_of_file "../maps/contest2.map" in
-  assert (f.score = 281);
-  let f = waffle ~print:false "LDDDRRRRDDLLLLLDURRRUURRR" & load_field & lines_of_file "../maps/contest3.map" in
-  assert (f.score = 275);
-
-
-
-
-  log "Tests passed"
-
-(* }}} *)
-
-(* let heuristics_score f = 1000 * f.score + List.length f.moves_taken *)
-let heuristics_score f = f.score
+let apply_solution field some_moves =
+  let exploded_moves = String.explode some_moves $ List.map String.of_char $ List.rev in
+  List.fold_right (fun action field -> do_action field action) exploded_moves field
 
 let manhattan_distance (ax, ay) (bx, by) = (1 + bx - ax $ abs) + (1 + by - ay $ abs)
-
 
 let get_rocks f =
   let lambda_map = CoordMap.filter (fun k v -> v = Rock) f.f in
@@ -507,8 +411,11 @@ let lambda_manhattan_score f =
 
 let scorer = lambda_manhattan_score
 
+let proper_solution_from_move_list move_list =
+  String.join "" (List.rev move_list)
 
-let solve f =
+
+let solve ?(quiet=false) ?(use_signals=true) f =
 
   let h = (snd f.dimensions) and w = (fst f.dimensions) in
 
@@ -538,7 +445,7 @@ let solve f =
   in
 
   let rec process_frontier () =
-    printf ".%!";
+    if not quiet then printf ".%!";
     let had_modifications = ref 0 in
     for j = 1 to h do
       for k = 1 to w do
@@ -551,28 +458,28 @@ let solve f =
     if !had_modifications > 0 then process_frontier ()
   in
 
+  if use_signals then Sys.set_signal Sys.sigint (Sys.Signal_handle (fun _ ->
+      Sys.set_signal Sys.sigint Sys.Signal_default;
+      let maximum = ref f in
 
-  Sys.set_signal Sys.sigint (Sys.Signal_handle (fun _ ->
-    let maximum = ref f in
-
-    for j = 1 to h do
-      for k = 1 to w do
-        match astar.(j).(k) with
-        | [] -> ()
-        | f::t -> if f.score > !maximum.score then maximum := f
+      for j = 1 to h do
+        for k = 1 to w do
+          match astar.(j).(k) with
+          | [] -> ()
+          | f::t -> if f.score > !maximum.score then maximum := f
+        done;
       done;
-    done;
-    let solution = if !maximum.is_complete
-    then !maximum.moves_taken
-    else "A" :: !maximum.moves_taken in
-    animate_solution f solution;
-    exit 0;
+      let solution = if !maximum.is_complete
+      then !maximum.moves_taken
+      else "A" :: !maximum.moves_taken in
+      animate_solution f (proper_solution_from_move_list solution);
+      exit 0;
   ));
 
   let x,y = f.robot in astar.(y).(x) <- [f];
   process_frontier ();
 
-  Sys.set_signal Sys.sigint Sys.Signal_default;
+  if use_signals then Sys.set_signal Sys.sigint Sys.Signal_default;
 
   let maximum = ref f in
 
@@ -583,19 +490,91 @@ let solve f =
       | f::t -> if f.score > !maximum.score then maximum := f
     done
   done;
-  if !maximum.is_complete
-  then !maximum.moves_taken
-  else "A" :: !maximum.moves_taken
+  let solution =
+    if !maximum.is_complete
+    then !maximum.moves_taken
+    else "A" :: !maximum.moves_taken
+  in
+  (proper_solution_from_move_list solution)
 
 
+(* {{{ torture / scoring *)
+
+let torture_chambers =
+  [ "/home/w/projekti/icfp12/maps/contest1.map", 212
+  ; "/home/w/projekti/icfp12/maps/contest2.map", 281
+  ; "/home/w/projekti/icfp12/maps/contest3.map", 275
+  ; "/home/w/projekti/icfp12/maps/contest4.map", 575
+  ; "/home/w/projekti/icfp12/maps/contest5.map", 1303
+  ; "/home/w/projekti/icfp12/maps/contest6.map", 1177
+  ; "/home/w/projekti/icfp12/maps/contest7.map", 869
+  ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
+  ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
+  ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
+  ; "/home/w/projekti/icfp12/maps/flood1.map", 945
+  ; "/home/w/projekti/icfp12/maps/flood2.map", 281
+  ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
+  ; "/home/w/projekti/icfp12/maps/flood4.map", 1592
+  ; "/home/w/projekti/icfp12/maps/flood5.map", 575
+  ]
+
+let torture torture_fn =
+  let tortured_total, best_possible_total =
+  List.fold_left (fun  (tortured_total, best_possible_total) (map, best_possible_score) ->
+    let field = load_field & lines_of_file & map
+    and solution = torture_fn map in
+    let solved_field = apply_solution field solution in
+    log "%s: %4d of %4d" map solved_field.score best_possible_score;
+    (tortured_total + solved_field.score, best_possible_total + best_possible_score)
+  ) (0,0) torture_chambers in
+  log "TOTAL: %4d of %d" tortured_total best_possible_total
+
+
+
+let self_torture map_file =
+  solve ~quiet:true & load_field & lines_of_file & map_file
+
+(* }}} *)
+
+
+(* {{{ run_tests *)
+
+  let run_tests () =
+  let waffle ?(print=true) cmds f =
+    let grr = ref f in
+    if print then print_field !grr;
+    for i = 0 to pred & String.length cmds do
+      grr := do_action !grr (String.get cmds i $ Std.string_of_char);
+      if print then print_field !grr;
+    done;
+    !grr
+
+  in
+  let f = waffle ~print:false "LDRDDUULLLDDL" & load_field & lines_of_file "../maps/contest1.map" in
+  assert (f.score = 212);
+  let f = waffle ~print:false "RRUDRRULURULLLLDDDL" & load_field & lines_of_file "../maps/contest2.map" in
+  assert (f.score = 281);
+  let f = waffle ~print:false "LDDDRRRRDDLLLLLDURRRUURRR" & load_field & lines_of_file "../maps/contest3.map" in
+  assert (f.score = 275);
+
+  let n = proper_solution_from_move_list ["A"; "B"; "C"] in
+  assert (n = "CBA");
+
+  log "Tests passed"
+
+(* }}} *)
 
 let _ =
 
-  (* run_tests (); *)
+  run_tests ();
 
   if Array.length Sys.argv = 1 then begin
 
     ();
+
+  end else if Sys.argv.(1) = "torture" then begin
+
+    torture self_torture;
 
   end else if Array.length Sys.argv = 2 then begin
 
@@ -605,8 +584,8 @@ let _ =
 
   end else begin
 
-    let f = load_field & lines_of_file & Sys.argv.(1) in
-    String.explode Sys.argv.(2) $ List.map String.of_char $ List.rev $ animate_solution f;
+    let f = load_field & lines_of_file Sys.argv.(1) in
+    animate_solution f Sys.argv.(2)
 
   end;
 
