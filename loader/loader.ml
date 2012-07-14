@@ -226,7 +226,7 @@ let exec_action field action =
 
   if field.is_complete then raise Bork_finished;
 
-  if action = "A" then raise (Finished (field.score + 25 * field.lambdas_eaten - 1));
+  if action = "A" then raise (Finished (field.score + 25 * field.lambdas_eaten));
 
   let new_robo_coords = update_robot field.robot action in
   (* nevar paiet, stāvi uz vietas *)
@@ -258,7 +258,6 @@ let exec_action field action =
 
           (* robots iekāpj liftā *)
           if loc.stuff = Lift then (
-            (* raise Finished (score = field.score + 50 * field.lambdas_eaten - 1) *)
             raise (Finished (field.score + 50 * field.lambdas_eaten - 1))
           ) else
 
@@ -275,25 +274,27 @@ let exec_action field action =
             and c_left   = loc.coords ^+ (-1, +0)
             and c_right  = loc.coords ^+ (+1, +0)
             and c_bottom_left  = loc.coords ^+ (-1, -1)
-            and c_bottom_right = loc.coords ^+ (+1, -1)
+            and c_bottom_right = loc.coords ^+ (+1, -1) in
+            let peek_bottom = peek c_bottom
+            and peek_right = peek c_right
+            and peek_left = peek c_left
             in
-            if peek c_bottom = None && c_bottom <> new_robo_coords then (
+            if peek_bottom = None && c_bottom <> new_robo_coords then (
               (* akmens krīt lejā vertikāli *)
-              (* bork: var uzkrist uz robota galvas *)
               if new_robo_coords = loc.coords ^+ (+0, -2) then raise Bork_fallen_rock;
               { loc with coords = c_bottom } :: (loop t)
             ) else
-            if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then (
+            if peek_bottom = Some Rock && peek_right = None && peek c_bottom_right = None then (
                 (* uz leju pa labi *)
                 if new_robo_coords = loc.coords ^+ (+1, -2) then raise Bork_fallen_rock;
                 { loc with coords = c_bottom_right } :: (loop t)
             ) else
-            if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then (
+            if peek_bottom = Some Lambda && peek_right = None && peek c_bottom_right = None then (
                 (* uz leju pa labi *)
                 if new_robo_coords = loc.coords ^+ (+1, -2) then raise Bork_fallen_rock;
                 { loc with coords = c_bottom_right } :: (loop t)
             ) else
-            if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then (
+            if peek_bottom = Some Rock && (peek_left = None && peek c_bottom_left = None) && (peek_right <> None || peek c_bottom_right <> None) then (
               if new_robo_coords = loc.coords ^+ (-1, -2) then raise Bork_fallen_rock;
               { loc with coords = c_bottom_left } :: (loop t)
             ) else
@@ -330,7 +331,7 @@ let animate_solution field winning_moves =
   let rec loop cf = function
     | action::actions ->
         let nf = do_action cf action in
-        ignore(Unix.select [] [] [] 0.2);
+        ignore(Unix.select [] [] [] 0.1);
         print_field nf;
         loop nf actions
     | _ -> ()
@@ -409,7 +410,7 @@ let run_tests () =
 
   let f_abort = do_action f "A" in
   if print then print_field f_abort;
-  assert (f_abort.score = 18 + 25 - 1);
+  assert (f_abort.score = 18 + 25);
 
   ignore(waffle ~print:false "WWWWW" &
   load_field
@@ -441,8 +442,12 @@ let get_lambdas f =
     | _ -> []
   in loop f.f
 
+let heuristics_score f =
+  f.score
+  (* 100 * f.score + 10 * f.lambdas_eaten - (1 * List.length f.moves_taken) *)
+
 let best n fs =
-  List.sort ~cmp:(fun a b -> - a.score + b.score) fs $ List.take n
+  List.sort ~cmp:(fun a b -> (-) (heuristics_score b) (heuristics_score a)) fs $ List.take n
 
 
 let solve f =
@@ -452,43 +457,64 @@ let solve f =
   let astar = make_2d_array (h + 1) (w + 1) [] in
 
 
-  let new_frontier = ref [] in
-  let search_depth = 3 in
+  let tolerance = 5 in
 
-  let astar_put_score new_field =
-    let x,y = new_field.robot in match astar.(y).(x) with
-    | [] ->
-        astar.(y).(x) <- [new_field];
-        new_frontier := new_field :: !new_frontier;
-    | fs ->
-        if List.length fs <= search_depth then (
-          astar.(y).(x) <- new_field :: fs;
-          new_frontier := new_field :: !new_frontier;
-        ) else
-          if List.exists (fun elem -> elem.score < new_field.score) fs then (
-            astar.(y).(x) <- best search_depth (new_field :: fs);
-            new_frontier := new_field :: !new_frontier;
-          )
+
+  let rec loop_astar tries =
+    let astar_put_score f = 
+      let x,y = f.robot in
+      if astar.(y).(x) = [] || (List.fold_left (fun a b -> min a (heuristics_score b)) 999999 astar.(y).(x) < heuristics_score f) then (
+        astar.(y).(x) <- best tolerance (f :: astar.(y).(x));
+        1
+      ) else (
+        0
+      )
+    in
+    match tries with
+    | h::t -> if h.is_complete $ not then (
+      (try ( astar_put_score & do_action h "U") with _ -> 0) +
+      (try ( astar_put_score & do_action h "D") with _ -> 0) +
+      (try ( astar_put_score & do_action h "L") with _ -> 0) +
+      (try ( astar_put_score & do_action h "R") with _ -> 0) (* +
+      (try ( astar_put_score & do_action f "A") with _ -> 0) *) + loop_astar t
+    ) else loop_astar t
+    | _ -> 0
   in
 
-  let rec process_frontier frontier =
-    printf ".%![%d]" & List.length frontier;
+  let rec process_frontier () =
+    printf ".%!";
+    let had_modifications = ref 0 in
+    for j = 1 to h do
+      for k = 1 to w do
+        match astar.(j).(k) with
+        | [] -> ()
+        | fs ->
+            had_modifications := !had_modifications + (loop_astar fs)
+      done;
+    done;
+    if !had_modifications > 0 then process_frontier ()
+  in
+
+    (*
     new_frontier := [];
     let rec loop_frontier = function
       | f::t ->
-        (
+        if f.is_complete $ not then (
         (try ( astar_put_score & do_action f "U") with _ -> ());
         (try ( astar_put_score & do_action f "D") with _ -> ());
         (try ( astar_put_score & do_action f "L") with _ -> ());
         (try ( astar_put_score & do_action f "R") with _ -> ());
-        (try ( astar_put_score & do_action f "W") with _ -> ());
+        (try ( astar_put_score & do_action f "A") with _ -> ());
+        (* (try ( astar_put_score & do_action f "W") with _ -> () ); *)
         );
+        (* if f.robot = (3,4) then print_field & do_action f "L"; *)
         loop_frontier t
       | _ -> ()
     in
     loop_frontier frontier;
-    if !new_frontier <> [] then process_frontier !new_frontier
-  in
+    let ff = !new_frontier in
+    if !new_frontier <> [] then process_frontier ff
+    *)
 
 
   Sys.set_signal Sys.sigint (Sys.Signal_handle (fun _ ->
@@ -500,14 +526,17 @@ let solve f =
         | [] -> ()
         | fs -> let f = List.hd & best 1 fs in
             if f.score > !maximum.score then maximum := f
-      done
+      done;
     done;
-    animate_solution f ("A" :: !maximum.moves_taken);
+    let solution = if !maximum.is_complete 
+    then !maximum.moves_taken
+    else "A" :: !maximum.moves_taken in
+    animate_solution f solution;
     exit 0;
   ));
 
-  astar_put_score f;
-  process_frontier [ f ];
+  let x,y = f.robot in astar.(y).(x) <- [f];
+  process_frontier ();
 
   Sys.set_signal Sys.sigint Sys.Signal_default;
 
@@ -528,9 +557,24 @@ let solve f =
 
 
 let _ =
+
   run_tests ();
 
-  let initial_field = load_field & lines_of_file "../maps/contest6.map" in
-  solve initial_field $ animate_solution initial_field;
+  if Array.length Sys.argv = 1 then begin
+
+    ();
+
+  end else if Array.length Sys.argv = 1 then begin
+
+    let f = load_field & lines_of_file & Sys.argv.(1) in
+    solve f $ animate_solution f;
+
+  end else begin
+
+    let f = load_field & lines_of_file & Sys.argv.(1) in
+    String.explode Sys.argv.(2) $ List.map String.of_char $ List.rev $ animate_solution f;
+
+  end;
+
 
   ()
