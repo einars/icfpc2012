@@ -61,6 +61,8 @@ type field =
   ; cur_wetness: int
   ; cur_water: int
 
+  ; mutable solver_touched: bool
+
   }
 
 let rec count_lambdas f =
@@ -86,8 +88,8 @@ let char_of_elem ?(lambdas = 1) = function
   | Wall -> "▓"
   | Earth -> "·"
   | Empty -> " "
-  | Lift -> if lambdas = 0 then "O" else "L"
-  | Rock -> "*"
+  | Lift -> if lambdas = 0 then "@" else "#"
+  | Rock -> "O"
   | Lambda -> "λ"
   | Robot -> "E"
 
@@ -163,6 +165,7 @@ let load_field lines =
   ; water = water
   ; cur_wetness = 0
   ; cur_water = 0
+  ; solver_touched = false
   }
 
 
@@ -373,17 +376,14 @@ let do_action field ?(backtrack=true) action = (
     }
   )
 
-
 let animate_solution field winning_moves =
-  let rec loop cf = function
-    | action::actions ->
-        let nf = do_action cf action in
-        ignore(Unix.select [] [] [] 0.2);
+  List.fold_right
+      (fun action field ->
+        let nf = do_action field action in
+        ignore(Unix.select [] [] [] 0.1);
         print_field nf;
-        loop nf actions
-    | _ -> ()
-  in
-  List.rev winning_moves $ loop field
+        nf
+      ) winning_moves field $ ignore
 
 (* {{{ run_tests *)
 
@@ -482,10 +482,30 @@ let run_tests () =
 
 (* }}} *)
 
-let heuristics_score f = 1000 * f.score + List.length f.moves_taken
-let heuristics_comparator a b = (-) (heuristics_score b) (heuristics_score a)
+(* let heuristics_score f = 1000 * f.score + List.length f.moves_taken *)
+let heuristics_score f = f.score
 
-let best n fs = List.sort ~cmp:heuristics_comparator fs $ List.take n
+let manhattan_distance (ax, ay) (bx, by) = (1 + bx - ax $ abs) + (1 + by - ay $ abs)
+
+
+let get_rocks f =
+  let lambda_map = CoordMap.filter (fun k v -> v = Rock) f.f in
+  List.map (fun (k,v) -> k) (CoordMap.bindings lambda_map)
+
+let get_lambdas f =
+  let lambda_map = CoordMap.filter (fun k v -> v = Lambda || v = Lift) f.f in
+  List.map (fun (k,v) -> k) (CoordMap.bindings lambda_map)
+
+let rockability_score f =
+  let height = snd f.dimensions in
+  List.fold_left (fun sum (rock_x, rock_y) -> sum - rock_x - rock_y * height) 0 (get_rocks f)
+
+let lambda_manhattan_score f =
+  + (rockability_score f) / 2
+  - 50 * f.lambdas * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
+  + 2 * f.score
+
+let scorer = lambda_manhattan_score
 
 
 let solve f =
@@ -494,30 +514,27 @@ let solve f =
 
   let astar = make_2d_array (h + 1) (w + 1) [] in
 
-
-  let tolerance = 15 in
-
-
-  let rec loop_astar tries =
+  let rec process_astar ff =
     let astar_put_score f =
-      let x,y = f.robot in
-      if astar.(y).(x) = [] || (List.fold_left (fun a b -> min a (heuristics_score b)) 999999 astar.(y).(x) < heuristics_score f) then (
-        astar.(y).(x) <- best tolerance (f :: astar.(y).(x));
+      let x,y = f.robot in let best = astar.(y).(x) in
+      if best = [] || (scorer (List.hd best) < (scorer f)) then (
+        astar.(y).(x) <- [ { f with solver_touched = false } ];
         1
       ) else (
         0
       )
     and allow_backtrack = true
     in
-    match tries with
-    | h::t -> if h.is_complete $ not then (
-      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "U") with _ -> 0) +
-      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "D") with _ -> 0) +
-      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "L") with _ -> 0) +
-      (try ( astar_put_score & do_action h ~backtrack:allow_backtrack "R") with _ -> 0) (* +
-      (try ( astar_put_score & do_action f "A") with _ -> 0) *) + loop_astar t
-    ) else loop_astar t
-    | _ -> 0
+    if ff.solver_touched $ not then (
+      let res =
+      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "U") with _ -> 0) +
+      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "D") with _ -> 0) +
+      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "L") with _ -> 0) +
+      (try ( astar_put_score & do_action ff ~backtrack:allow_backtrack "R") with _ -> 0)
+      in
+      ff.solver_touched <- true;
+      res
+    ) else 0
   in
 
   let rec process_frontier () =
@@ -527,9 +544,8 @@ let solve f =
       for k = 1 to w do
         match astar.(j).(k) with
         | [] -> ()
-        | h::[] -> had_modifications := !had_modifications + (loop_astar [h])
-        | fs ->
-            had_modifications := !had_modifications + (List.sort ~cmp:heuristics_comparator fs $ loop_astar)
+        | h::[] -> had_modifications := !had_modifications + process_astar h;
+        | _ -> failwithf "astar coma"
       done;
     done;
     if !had_modifications > 0 then process_frontier ()
@@ -543,8 +559,7 @@ let solve f =
       for k = 1 to w do
         match astar.(j).(k) with
         | [] -> ()
-        | fs -> let f = List.hd & best 1 fs in
-            if f.score > !maximum.score then maximum := f
+        | f::t -> if f.score > !maximum.score then maximum := f
       done;
     done;
     let solution = if !maximum.is_complete
@@ -565,8 +580,7 @@ let solve f =
     for k = 1 to w do
       match astar.(j).(k) with
       | [] -> ()
-      | fs -> let f = List.hd & best 1 fs in
-          if f.score > !maximum.score then maximum := f
+      | f::t -> if f.score > !maximum.score then maximum := f
     done
   done;
   if !maximum.is_complete
