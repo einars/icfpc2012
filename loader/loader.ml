@@ -71,8 +71,6 @@ type field =
   ; growth: int
   ; razors: int
 
-  ; mutable solver_touched: bool
-
   }
 
 let rec count_lambdas f =
@@ -224,7 +222,6 @@ let load_field lines =
 
   ; cur_wetness = 0
   ; cur_water = 0
-  ; solver_touched = false
   }
 
 
@@ -490,15 +487,10 @@ let animate_solution field winning_moves =
       ) exploded_moves field $ ignore
 
 let apply_solution field some_moves =
-  let exploded_moves = String.explode some_moves $ List.map String.of_char $ List.rev in
-  List.fold_right (fun action field -> do_action field action) exploded_moves field
+  List.fold_left do_action field & String.explode some_moves $ List.map String.of_char
 
 
 let manhattan_distance (ax, ay) (bx, by) = (1 + bx - ax $ abs) + (1 + by - ay $ abs)
-
-let get_rocks f =
-  let lambda_map = CoordMap.filter (fun k v -> v = Rock) f.f in
-  List.map (fun (k,v) -> k) (CoordMap.bindings lambda_map)
 
 let get_lambdas f =
   let lambda_map = CoordMap.filter (fun k v -> v = Lambda || v = Lift) f.f in
@@ -509,14 +501,16 @@ let n_beards f =
 
 
 let rockability_score f =
-  let height = snd f.dimensions in
-  List.fold_left (fun sum (rock_x, rock_y) -> sum + rock_x + rock_y * height / 2) 0 (get_rocks f)
+  let score = ref 0
+  and height = snd f.dimensions in
+  CoordMap.iter (fun (rock_x, rock_y) e -> if e = Rock then score := !score + rock_x + rock_y * height / 2) f.f;
+  !score
 
 let heuristic_score f =
   - (rockability_score f) / 4
-  - 25 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
-  - (n_beards f) * 5
-  + f.razors * 5
+  - 30 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
+  - (n_beards f) * 5000
+  + f.razors * 100000
   + f.score
 
 
@@ -536,9 +530,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
           if hscore < heuristic_score new_field then (
             astar.(ny).(nx) <- History (new_field, heuristic_score new_field);
             1
-          ) else (
-            0
-          )
+          ) else 0
       | Blank ->
           astar.(ny).(nx) <- History ( new_field, heuristic_score new_field );
           1;
@@ -548,9 +540,9 @@ let solve ?(quiet=false) ?(use_signals=true) f =
     | Blank -> 0
     | History (old_field, old_score) ->
         let res =
-          (try ( astar_put_score & do_action old_field "U") with _ -> 0) +
           (try ( astar_put_score & do_action old_field "D") with _ -> 0) +
           (try ( astar_put_score & do_action old_field "L") with _ -> 0) +
+          (try ( astar_put_score & do_action old_field "U") with _ -> 0) +
           (try ( astar_put_score & do_action old_field "R") with _ -> 0) +
           (if old_field.razors > 0 then (try ( astar_put_score & do_action old_field "S") with _ -> 0) else 0)
         in
