@@ -523,7 +523,7 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/contest7.map", 869
   ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
   ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
-  (* ; "/home/w/projekti/icfp12/maps/contest10.map", 3634 *)
+  ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
   ; "/home/w/projekti/icfp12/maps/flood1.map", 945
   ; "/home/w/projekti/icfp12/maps/flood2.map", 281
   ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
