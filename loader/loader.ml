@@ -39,7 +39,8 @@ let make_2d_array n m init =
 
 (* }}} *)
 
-type elem = Wall | Rock | Lift | Earth | Empty | Lambda | Robot
+type elem = Wall | Rock | Lift | Earth | Empty | Lambda | Beard of int | Razor |
+    SysRobot | SysCandidates of (coords * elem) list
 
 let initial_robot_coordinates = ref (0,0)
 
@@ -53,13 +54,15 @@ type field =
   ; is_complete: bool
   ; moves_taken: string list
 
-
   ; water: int
   ; flooding: int
   ; waterproof: int
 
   ; cur_wetness: int
   ; cur_water: int
+
+  ; growth: int
+  ; razors: int
 
   ; mutable solver_touched: bool
 
@@ -82,6 +85,8 @@ let load_char = function
   | '0' -> Lambda, false
   | '*' -> Rock, false
   | '\\'-> Lambda, false
+  | 'W'-> Beard 0, false
+  | '!'-> Razor, false
   | c -> failwithf "Unknown char %c" c
 
 let char_of_elem ?(lambdas = 1) = function
@@ -91,7 +96,10 @@ let char_of_elem ?(lambdas = 1) = function
   | Lift -> if lambdas = 0 then "@" else "#"
   | Rock -> "O"
   | Lambda -> "λ"
-  | Robot -> "E"
+  | Beard _ -> "W"
+  | Razor _ -> "!"
+  | SysRobot -> failwith "char_of_elem certainly didn't expect any Robot"
+  | SysCandidates _ -> failwith "char_of_elem certainly didn't expect any Candidates"
 
 
 let load_line pos s accum =
@@ -105,12 +113,15 @@ let load_line pos s accum =
       if robo then initial_robot_coordinates := ps;
       match elem with
       | Wall -> CoordMap.add ps Wall rest
+      | Razor -> CoordMap.add ps Razor rest
       | Rock -> CoordMap.add ps Rock rest
       | Lift -> CoordMap.add ps Lift rest
       | Earth -> CoordMap.add ps Earth rest
       | Lambda -> CoordMap.add ps Lambda rest
-      | Robot -> failwith "I certainly didn't expect Robot in response to load_char"
+      | Beard _ -> CoordMap.add ps (Beard 0) rest
       | Empty -> rest
+      | SysRobot -> failwith "I certainly didn't expect Robot in response to load_char"
+      | SysCandidates _ -> failwith "I certainly didn't expect Candidates in response to load_char"
     )
   in
   loop pos accum
@@ -123,16 +134,19 @@ let invert_y dimensions pos =
   x, h - y + 1
 
 let parse_metadata lines =
-  let rec loop water flooding waterproof = function
-    | l :: rest -> let k, v = String.split (String.strip l) " " in
-    if k = "Flooding"        then loop water (String.to_int v) waterproof rest
-    else if k = "Waterproof" then loop water flooding (String.to_int v) rest
-    else if k = "Water"      then loop (String.to_int v) flooding waterproof rest
+  let rec loop water flooding waterproof growth razors = function
+  | l :: rest -> let k, v = String.split (String.strip l) " " in
+    let nv = String.to_int v in
+         if k = "Water"      then loop (nv)  flooding waterproof growth razors rest
+    else if k = "Flooding"   then loop water (nv)     waterproof growth razors rest
+    else if k = "Waterproof" then loop water flooding (nv)       growth razors rest
+    else if k = "Growth"     then loop water flooding waterproof (nv)   razors rest
+    else if k = "Razors"     then loop water flooding waterproof growth (nv)   rest
     else failwithf "Unknown metadata key %s" k
-  | _ -> water, flooding, waterproof
-  in loop 0 0 10 lines
+  | _ -> water, flooding, waterproof, growth, razors
+  in loop 0 0 10 25 0 lines
 
-let split_lines lines =
+let split_lines_to_field_and_metadata lines =
   let rec loop is_metadata field metadata = function
   | "" :: t -> loop true field metadata t
   | l :: t -> loop is_metadata (if is_metadata then field else l::field) (if is_metadata then l::metadata else metadata) t
@@ -141,12 +155,12 @@ let split_lines lines =
 
 let load_field lines =
   let rec loop pos = function
-    | line::rest -> load_line pos line ( loop (pos ^+ (0,1) ) rest )
+    | line::rest -> load_line pos (String.strip line) ( loop (pos ^+ (0,1) ) rest )
     | _ -> CoordMap.empty
   in
-  let l_field, l_meta = split_lines lines in
-  let loaded_field = loop (1, 1) l_field in
-  let water, flooding, waterproof = parse_metadata l_meta in
+  let l_field, l_meta = split_lines_to_field_and_metadata lines in
+  let loaded_field = loop (1, 1) l_field
+  and water, flooding, waterproof, growth, razors = parse_metadata l_meta in
   let dimensions = get_dimensions loaded_field in
   { f = CoordMap.fold
       (fun coords elem new_map -> CoordMap.add (invert_y dimensions coords) elem new_map)
@@ -163,6 +177,9 @@ let load_field lines =
   ; waterproof = waterproof
   ; flooding = flooding
   ; water = water
+  ; growth = growth
+  ; razors = razors
+
   ; cur_wetness = 0
   ; cur_water = 0
   ; solver_touched = false
@@ -170,17 +187,11 @@ let load_field lines =
 
 
 let print_field f =
-  (*
-  log "Robot @ %s" & string_of_coords f.robot;
-  log "Field dimensions: %s" & string_of_coords f.dimensions;
-  *)
   let w, h = f.dimensions in
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
   printf "\x1b[2J\x1b[;H";
-
-  List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
-  log "\nscore=%d eaten=%d/%d\nwater=%d/%d flooding=%d wetness=%d/%d" f.score f.lambdas_eaten (f.lambdas_eaten + f.lambdas) f.water f.cur_water f.flooding f.cur_wetness f.waterproof;
+  log "";
 
   let rx, ry = f.robot in repr.(ry).(rx) <- "R";
 
@@ -196,38 +207,41 @@ let print_field f =
     printf "\n%!";
   done;
 
-  log ""
+  log "";
+  log "\nscore=%d eaten=%d/%d razors=%d" f.score f.lambdas_eaten (f.lambdas_eaten + f.lambdas) f.razors;
+  log "water=%d/%d flooding=%d wetness=%d/%d growth=%d" f.water f.cur_water f.flooding f.cur_wetness f.waterproof f.growth;
+  List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
+  ()
 
 (* }}} *)
 
 
-let peek_location ?(robot=(-1,-1)) f l =
-  if robot = l then Some Robot else
-    if CoordMap.mem l f.f then Some (CoordMap.find l f.f) else None
+let peek_map ?(robot=(-1,-1)) f l =
+  if robot = l then SysRobot
+  else try CoordMap.find l f with _ -> Empty
 
-let string_of_elem_at f l =
-  match peek_location f l with
-  | Some l -> char_of_elem l
-  | None -> " "
+let string_of_elem_at f l = peek_map f.f l $ char_of_elem
 
 
-let rec is_empty field c =
-  match peek_location field c with
-  | None | Some Empty -> true
-  | _ -> false
+let rec is_empty field c = peek_map field.f c = Empty
 
 let rec is_walkable field direction c =
-  match peek_location field c with
-  | Some Wall  -> false
-  | Some Lift  -> field.lambdas = 0
-  | Some Rock  ->
+  match peek_map field.f c with
+  | Wall  -> false
+  | Beard _ -> false
+  | Razor -> true
+  | Lambda -> true
+  | Empty -> true
+  | Earth -> true
+  | Lift  -> field.lambdas = 0
+  | Rock  ->
       (* rocks can be pushed? *)
       if direction = "L" then
         is_empty field (c ^- (1, 0))
       else if direction = "R" then
         is_empty field (c ^+ (1, 0))
       else false
-  | _ -> true
+  | SysCandidates _ | SysRobot -> failwith "is_walkable got some internal system elements"
 
 
 let update_robot coords = function
@@ -246,40 +260,49 @@ exception Bork_drowned
 
 exception Finished of int
 
-let exec_action field ?(backtrack=true) ?(allow_unwalkable=false) action =
+let exec_action field ?(allow_unwalkable=false) action =
 
   if field.is_complete then raise Bork_finished;
 
   if action = "A" then raise (Finished field.score);
 
+  let old_map = field.f in
+
   let new_robo_coords = update_robot field.robot action in
   (* nevar paiet, stāvi uz vietas *)
+
+
+  (* XXX needs to look at the new map and old map as well *)
   let new_robo_coords =
   if not & is_walkable field action new_robo_coords then (
     if allow_unwalkable then field.robot else raise Bork_unwalkable;
   ) else new_robo_coords in
 
-  let peek = peek_location ~robot:new_robo_coords field in
+  let peek = peek_map ~robot:new_robo_coords in
 
   let score_diff, lambda_diff =
-  match peek_location field new_robo_coords with
-  | Some Earth -> -1, 0
-  | Some Lambda -> 49, 1
-  (* | Some Lift -> 50 * field.lambdas_eaten - 1, 0 (* handled via internal raise Finished *)*)
+  match peek_map old_map new_robo_coords with
+  | Earth -> -1, 0
+  | Lambda -> 49, 1
   | _ -> -1, 0
   in
 
 
   let rec update_location coords loc =
-    if loc = Wall then coords, Some loc else
+
+    if loc = Wall then coords, loc else
     if coords = new_robo_coords then (
 
+      (* razor taken, handled at the new_razors calculation *)
+      if loc = Razor then coords, Empty
+      else
+
       (* robots uzkāpj uz zemes, zeme pazūd: skipojam cellu *)
-      if loc = Earth then coords, None
+      if loc = Earth then coords, Empty
       else
 
       (* robots apēd lambdu *)
-      if loc = Lambda then coords, None
+      if loc = Lambda then coords, Empty
       else
 
       (* robots iekāpj liftā *)
@@ -292,47 +315,71 @@ let exec_action field ?(backtrack=true) ?(allow_unwalkable=false) action =
       if loc = Rock then
         let delta = (if action = "L" then (-1, 0) else (1, 0)) in
         update_location (coords ^+ delta) loc
-      else (coords, Some loc)
+      else (coords, loc)
 
     ) else (
 
-      if loc = Rock then begin
-
+      match loc with
+      | Rock -> begin
         let c_bottom = coords ^+ (+0, -1)
         and c_left   = coords ^+ (-1, +0)
         and c_right  = coords ^+ (+1, +0)
         and c_bottom_left  = coords ^+ (-1, -1)
         and c_bottom_right = coords ^+ (+1, -1) in
-        if peek c_bottom = None && c_bottom <> new_robo_coords then (
+        if peek old_map c_bottom = Empty && c_bottom <> new_robo_coords then (
           (* akmens krīt lejā vertikāli *)
           if new_robo_coords = coords ^+ (+0, -2) then raise Bork_fallen_rock;
-          (c_bottom, Some loc)
+          (c_bottom, loc)
         ) else
-        if peek c_bottom = Some Rock && peek c_right = None && peek c_bottom_right = None then (
+        if peek old_map c_bottom = Rock && peek old_map c_right = Empty && peek old_map c_bottom_right = Empty then (
             (* uz leju pa labi *)
             if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
-            (c_bottom_right, Some loc)
+            (c_bottom_right, loc)
         ) else
-        if peek c_bottom = Some Lambda && peek c_right = None && peek c_bottom_right = None then (
+        if peek old_map c_bottom = Lambda && peek old_map c_right = Empty && peek old_map c_bottom_right = Empty then (
             (* uz leju pa labi *)
             if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
-            (c_bottom_right, Some loc)
+            (c_bottom_right, loc)
         ) else
-        if peek c_bottom = Some Rock && (peek c_left = None && peek c_bottom_left = None) && (peek c_right <> None || peek c_bottom_right <> None) then (
+        if peek old_map c_bottom = Rock && (peek old_map c_left = Empty && peek old_map c_bottom_left = Empty) && (peek old_map c_right <> Empty || peek old_map c_bottom_right <> Empty) then (
           if new_robo_coords = coords ^+ (-1, -2) then raise Bork_fallen_rock;
-          (c_bottom_left, Some loc)
+          (c_bottom_left, loc)
         ) else
-          (coords, Some loc)
+          (coords, loc)
       end
-        else
-        (coords, Some loc)
+      | Beard n -> begin
+        if n = field.growth - 1 then
+          coords, SysCandidates
+          [ (coords, Beard 0)
+          ; (let c = (-1, -1) ^+ coords in c, Beard 0)
+          ; (let c = (-1, +0) ^+ coords in c, Beard 0)
+          ; (let c = (-1, +1) ^+ coords in c, Beard 0)
+          ; (let c = (+0, -1) ^+ coords in c, Beard 0)
+
+          ; (let c = (+0, +1) ^+ coords in c, Beard 0)
+          ; (let c = (+1, -1) ^+ coords in c, Beard 0)
+          ; (let c = (+1, +0) ^+ coords in c, Beard 0)
+          ; (let c = (+1, +1) ^+ coords in c, Beard 0)
+          ]
+        else (coords, Beard (n + 1));
+      end
+      | _ -> coords, loc
     )
+  in
+
+  let new_razors = field.razors
+    + if peek old_map new_robo_coords = Razor then 1 else 0
+    + if action = "S" then -1 else 0
   in
 
   let nf = CoordMap.fold
     (fun coords elem new_map -> match update_location coords elem with
-    | new_coords, Some elem -> CoordMap.add new_coords elem new_map
-    | _, None -> new_map)
+    | new_coords, Empty -> new_map
+    | new_coords, SysCandidates cs ->
+        (* first candidate is definite, its existing beard *)
+        let (b_coords, b_elem) = List.hd cs in
+        CoordMap.add b_coords b_elem (List.fold_left (fun map (c,e) -> if c = new_robo_coords || CoordMap.mem c map then map else CoordMap.add c e map) new_map (List.tl cs))
+    | new_coords, elem -> CoordMap.add new_coords elem new_map)
     field.f
     CoordMap.empty in
 
@@ -356,11 +403,13 @@ let exec_action field ?(backtrack=true) ?(allow_unwalkable=false) action =
     cur_water = cur_water;
     cur_wetness = cur_wetness;
     water = water;
+
+    razors = new_razors;
   }
 
-let do_action field ?(backtrack=true) ?(allow_unwalkable=false) action = (
+let do_action field ?(allow_unwalkable=false) action = (
   try
-    exec_action field ~backtrack:backtrack ~allow_unwalkable:allow_unwalkable action
+    exec_action field ~allow_unwalkable:allow_unwalkable action
   with
     | Finished total_score-> { field with
         is_complete = true;
@@ -395,12 +444,13 @@ let get_lambdas f =
 
 let rockability_score f =
   let height = snd f.dimensions in
-  List.fold_left (fun sum (rock_x, rock_y) -> sum - rock_y * height) 0 (get_rocks f)
+  List.fold_left (fun sum (rock_x, rock_y) -> sum + rock_x + rock_y * height / 2) 0 (get_rocks f)
 
 let lambda_manhattan_score f =
-  + (rockability_score f) / 4
+  - (rockability_score f) / 4
   - 25 * f.lambdas * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
-  + 3 * f.score
+  + f.razors * 3
+  + f.score
 
 let scorer = lambda_manhattan_score
 
@@ -502,7 +552,7 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/contest7.map", 869
   ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
   ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
-  ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
+  (* ; "/home/w/projekti/icfp12/maps/contest10.map", 3634 *)
   ; "/home/w/projekti/icfp12/maps/flood1.map", 945
   ; "/home/w/projekti/icfp12/maps/flood2.map", 281
   ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
@@ -573,7 +623,11 @@ in
 
 let _ =
 
-  run_tests ();
+  let quiet_mode = (try ignore(Sys.getenv "QUIET"); true with _ -> false)
+  and do_tests = (try ignore(Sys.getenv "NOTEST"); false with _ -> true)
+  in
+
+  if (do_tests) then run_tests ();
 
   if Array.length Sys.argv = 1 then begin
 
@@ -591,12 +645,17 @@ let _ =
 
     let f = load_field & lines_of_file & Sys.argv.(1) in
     (* solve f $ String.join "" $  log "%s"; *)
-    solve f $ animate_solution f;
+
+    let solution = solve f in
+    if quiet_mode then apply_solution f solution $ print_field
+    else animate_solution f solution;
 
   end else begin
 
     let f = load_field & lines_of_file Sys.argv.(1) in
-    animate_solution f Sys.argv.(2)
+
+    if quiet_mode then apply_solution f Sys.argv.(2) $ print_field
+    else animate_solution f Sys.argv.(2) $ ignore;
 
   end;
 
