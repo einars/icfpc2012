@@ -270,7 +270,28 @@ let string_of_elem_at f l = peek_map f.f l $ char_of_elem
 
 let rec is_empty field c = peek_map field.f c = Empty
 
-let rec turns_grimrock_to_lambda map c =
+let is_blocked field c =
+  let cx, cy = c
+  and fw, fh = field.dimensions in
+  if cx < 1 || cy < 1 || cx > fw || cy > fh then true
+  else
+  match peek_map field.f c with
+  | Wall  -> true
+  | Beard _ -> false (* sic! not tragic, maybe we'll get a razor *)
+  | Razor -> false
+  | Lambda -> false
+  | Empty -> false
+  | Earth -> false
+  | Target _ -> false
+  | Trampoline _ -> false
+  | Lift  -> false
+  | Rock  -> true
+  | Grimrock  -> true
+  | SysRobot -> failwith "is_blocked got some SysRobot, that should not happen"
+  | SysTrampoline _ -> failwith "is_blocked got some SysRobot, that should not happen"
+
+
+let turns_grimrock_to_lambda map c =
   match peek_map map c with
   | Wall  -> true
   | Beard _ -> true
@@ -283,8 +304,8 @@ let rec turns_grimrock_to_lambda map c =
   | Lift  -> true
   | Rock  -> true
   | Grimrock  -> true
-  | SysRobot -> failwith "is_walkable got some SysRobot, that should not happen"
-  | SysTrampoline _ -> failwith "is_walkable got some SysRobot, that should not happen"
+  | SysRobot -> failwith "turns_grimrock_to_lambda got some SysRobot, that should not happen"
+  | SysTrampoline _ -> failwith "turns_grimrock_to_lambda got some SysRobot, that should not happen"
 
 
 let update_robot coords = function
@@ -346,9 +367,9 @@ let exec_action field action =
 
   let excitement_empty = 0
   and excitement_earth = 1
-  and excitement_rock = 10
+  and excitement_rock = 5
   and excitement_lambda = 100
-  and excitement_razor = 100
+  and excitement_razor = 10
   and excitement_trampoline = 1
   and excitement_grimrock = 1
   and excitement_shave = 5
@@ -519,10 +540,18 @@ let rockability_score f =
 
 let heuristic_score f =
   (* - (rockability_score f) / 4 *)
+  let lift = lift_coords f in
+  let lift_is_stoned =
+    (is_blocked f (lift ^+ (1,0))) &&
+    (is_blocked f (lift ^- (1,0))) &&
+    (is_blocked f (lift ^+ (0,1))) &&
+    (is_blocked f (lift ^- (0,1))) in
+
   + f.path_excitement
+  + if lift_is_stoned then (-9000) else 0
   + (if f.is_complete then 10000000 else 0)
-  + (if f.total_lambdas = f.lambdas_eaten then 1000000 else 0)
-  - 50 * (if f.total_lambdas = f.lambdas_eaten then manhattan_distance (lift_coords f) f.robot else 0)
+  + (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then 1000000 else 0)
+  - 50 * (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then manhattan_distance lift f.robot else 0)
   (*
   - 50 * (if f.total_lambdas = f.lambdas_eaten then manhattan_distance (lift_coords f) f.robot else 0)
   *)
