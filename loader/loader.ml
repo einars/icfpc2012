@@ -524,17 +524,21 @@ let solve ?(quiet=false) ?(use_signals=true) f =
 
   let w,h = f.dimensions in
 
-  let astar = make_2d_array (h + 1) (w + 1) [] in
+  let astar = make_2d_array (h + 1) (w + 1) None in
 
   let rec process_astar ff =
     let astar_put_score f =
-      let x,y = f.robot in let best = astar.(y).(x) in
-      if best = [] || (List.hd best $ heuristic_score < heuristic_score f) then (
-        astar.(y).(x) <- [ { f with solver_touched = false } ];
-        1
-      ) else (
-        0
-      )
+      let x,y = f.robot in match astar.(y).(x) with
+      | Some (current_best, hscore) ->
+          if hscore < heuristic_score f then (
+            astar.(y).(x) <- Some ({ f with solver_touched = false }, heuristic_score f);
+            1
+          ) else (
+            0
+          )
+      | None ->
+          astar.(y).(x) <- Some ( { f with solver_touched = false }, heuristic_score f );
+          1;
     in
     if ff.solver_touched $ not then (
       let res =
@@ -555,9 +559,8 @@ let solve ?(quiet=false) ?(use_signals=true) f =
     for j = 1 to h do
       for k = 1 to w do
         match astar.(j).(k) with
-        | [] -> ()
-        | h::[] -> had_modifications := !had_modifications + process_astar h;
-        | _ -> failwithf "astar coma"
+        | None -> ()
+        | Some (current_best, _) -> had_modifications := !had_modifications + process_astar current_best;
       done;
     done;
     if !had_modifications > 0 then process_frontier ()
@@ -570,8 +573,8 @@ let solve ?(quiet=false) ?(use_signals=true) f =
       for j = 1 to h do
         for k = 1 to w do
           match astar.(j).(k) with
-          | [] -> ()
-          | f::t -> if f.score > !maximum.score then maximum := f
+          | Some (current_best, hscore) -> if current_best.score > !maximum.score then maximum := current_best
+          | None -> ()
         done;
       done;
       let solution = if !maximum.is_complete
@@ -581,7 +584,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
       exit 0;
   ));
 
-  let x,y = f.robot in astar.(y).(x) <- [f];
+  let x,y = f.robot in astar.(y).(x) <- Some (f, heuristic_score f);
   process_frontier ();
 
   if use_signals then Sys.set_signal Sys.sigint Sys.Signal_default;
@@ -591,8 +594,8 @@ let solve ?(quiet=false) ?(use_signals=true) f =
   for j = 1 to h do
     for k = 1 to w do
       match astar.(j).(k) with
-      | [] -> ()
-      | f::t -> if f.score > !maximum.score then maximum := f
+      | Some (current_best, hscore) -> if current_best.score > !maximum.score then maximum := current_best
+      | None -> ()
     done
   done;
   let solution =
@@ -624,10 +627,10 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/flood5.map", 575
 
   ; "/home/w/projekti/icfp12/maps/beard1.map", 860
-  ; "/home/w/projekti/icfp12/maps/beard2.map", 4518
+  ; "/home/w/projekti/icfp12/maps/beard2.map", 4522
   ; "/home/w/projekti/icfp12/maps/beard3.map", 1789
-  ; "/home/w/projekti/icfp12/maps/beard4.map", 3013
-  ; "/home/w/projekti/icfp12/maps/beard5.map", 664
+  ; "/home/w/projekti/icfp12/maps/beard4.map", 3103
+  ; "/home/w/projekti/icfp12/maps/beard5.map", 665
 
   ; "/home/w/projekti/icfp12/maps/trampoline1.map", 426
   ; "/home/w/projekti/icfp12/maps/trampoline2.map", 1742
@@ -635,7 +638,7 @@ let torture_chambers =
 
   ; "/home/w/projekti/icfp12/maps/horock1.map", 758
   ; "/home/w/projekti/icfp12/maps/horock2.map", 747
-  ; "/home/w/projekti/icfp12/maps/horock3.map", 2403
+  ; "/home/w/projekti/icfp12/maps/horock3.map", 2406
   ]
 
 let torture torture_fn =
