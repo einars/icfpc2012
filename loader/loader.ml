@@ -504,14 +504,12 @@ let rockability_score f =
   let height = snd f.dimensions in
   List.fold_left (fun sum (rock_x, rock_y) -> sum + rock_x + rock_y * height / 2) 0 (get_rocks f)
 
-let lambda_manhattan_score f =
+let heuristic_score f =
   - (rockability_score f) / 4
   - 25 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
   - (n_beards f) * 5
   + f.razors * 5
   + f.score
-
-let scorer = lambda_manhattan_score
 
 let proper_solution_from_move_list move_list =
   String.join "" (List.rev move_list)
@@ -526,7 +524,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
   let rec process_astar ff =
     let astar_put_score f =
       let x,y = f.robot in let best = astar.(y).(x) in
-      if best = [] || (scorer (List.hd best) < (scorer f)) then (
+      if best = [] || (List.hd best $ heuristic_score < heuristic_score f) then (
         astar.(y).(x) <- [ { f with solver_touched = false } ];
         1
       ) else (
