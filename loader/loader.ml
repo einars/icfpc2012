@@ -290,21 +290,32 @@ let update_robot coords = function
   | "U" -> coords ^+ (0,1)
   | "D" -> coords ^+ (0,-1)
   | "W" -> coords
+  | "S" -> coords
   | s -> failwithf "Unknown robo-action %s" s
 
 exception Bork_unwalkable
 exception Bork_fallen_rock
 exception Bork_finished
 exception Bork_drowned
+exception Bork_worthless
+exception Bork_impossible
 
 exception Finished of int
 exception CoordsFound of coords
+
+
+let shave_map_at (sx, sy) map =
+  let shaven_map = CoordMap.filter (fun (cx, cy) e -> match e with Beard n -> if (cx - sx $ abs) < 2 && (cy - sy $ abs) < 2 then false else true | _ -> true ) map in
+  if CoordMap.cardinal shaven_map = CoordMap.cardinal map then raise Bork_worthless;
+  shaven_map
+
 
 let exec_action field ?(allow_unwalkable=false) action =
 
   if field.is_complete then raise Bork_finished;
 
   if action = "A" then raise (Finished field.score);
+  if action = "S" && field.razors = 0 then raise Bork_impossible;
 
   let new_robo_coords = update_robot field.robot action in
 
@@ -325,7 +336,7 @@ let exec_action field ?(allow_unwalkable=false) action =
 
 
   let map_with_targets_removed target_to_remove map =
-    CoordMap.filter (fun k e -> match e with 
+    CoordMap.filter (fun k e -> match e with
     | Trampoline t | Target t -> t <> target_to_remove | _ -> true) map
   in
 
@@ -337,7 +348,10 @@ let exec_action field ?(allow_unwalkable=false) action =
   | Trampoline t -> (
     (get_coords_of_target t field.f), (map_with_targets_removed t field.f)
   )
-  | Empty -> new_robo_coords, map
+  | Empty ->
+      if action = "S"
+      then new_robo_coords, (shave_map_at new_robo_coords map)
+      else new_robo_coords, map
   | Razor -> new_robo_coords, CoordMap.remove new_robo_coords map
   | Earth -> new_robo_coords, CoordMap.remove new_robo_coords map
   | Lambda -> new_robo_coords, CoordMap.remove new_robo_coords map
@@ -452,7 +466,7 @@ let animate_solution field winning_moves =
   List.fold_right
       (fun action field ->
         let nf = do_action field ~allow_unwalkable:true action in
-        ignore(Unix.select [] [] [] 0.1);
+        ignore(Unix.select [] [] [] 0.05);
         print_field nf;
         nf
       ) exploded_moves field $ ignore
@@ -471,6 +485,10 @@ let get_lambdas f =
   let lambda_map = CoordMap.filter (fun k v -> v = Lambda || v = Lift) f.f in
   List.map (fun (k,v) -> k) (CoordMap.bindings lambda_map)
 
+let n_beards f =
+  CoordMap.cardinal & CoordMap.filter (fun k v -> match v with Beard _ -> true | _ -> false) f.f
+
+
 let rockability_score f =
   let height = snd f.dimensions in
   List.fold_left (fun sum (rock_x, rock_y) -> sum + rock_x + rock_y * height / 2) 0 (get_rocks f)
@@ -478,7 +496,8 @@ let rockability_score f =
 let lambda_manhattan_score f =
   - (rockability_score f) / 4
   - 25 * f.lambdas * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
-  + f.razors * 3
+  - (n_beards f) * 5
+  + f.razors * 5
   + f.score
 
 let scorer = lambda_manhattan_score
@@ -508,7 +527,8 @@ let solve ?(quiet=false) ?(use_signals=true) f =
       (try ( astar_put_score & do_action ff "U") with _ -> 0) +
       (try ( astar_put_score & do_action ff "D") with _ -> 0) +
       (try ( astar_put_score & do_action ff "L") with _ -> 0) +
-      (try ( astar_put_score & do_action ff "R") with _ -> 0)
+      (try ( astar_put_score & do_action ff "R") with _ -> 0) +
+      (try ( astar_put_score & do_action ff "S") with _ -> 0)
       in
       ff.solver_touched <- true;
       res
@@ -682,11 +702,10 @@ let _ =
   and do_tests = (try ignore(Sys.getenv "NOTEST"); false with _ -> true)
   in
 
-  if (do_tests) then run_tests ();
-
   if Array.length Sys.argv = 1 then begin
 
-    ();
+    let f = load_field & Std.input_list stdin in
+    log "%s" & solve ~quiet:true f
 
   end else if Array.length Sys.argv = 2 && Sys.argv.(1) = "torture" then begin
 
@@ -698,6 +717,8 @@ let _ =
 
   end else if Array.length Sys.argv = 2 then begin
 
+    if (do_tests) then run_tests ();
+
     let f = load_field & lines_of_file & Sys.argv.(1) in
     (* solve f $ String.join "" $  log "%s"; *)
 
@@ -706,6 +727,8 @@ let _ =
     else animate_solution f solution;
 
   end else begin
+
+    if (do_tests) then run_tests ();
 
     let f = load_field & lines_of_file Sys.argv.(1) in
 
