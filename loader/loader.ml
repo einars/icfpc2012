@@ -419,18 +419,18 @@ let exec_action field action =
     end
     | Beard n -> begin
       let m = CoordMap.remove coords map in
-      if n = field.growth - 1 then
-        let m = let c = (-1, -1) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
-        let m = let c = (+0, -1) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
-        let m = let c = (+1, -1) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
-        let m = let c = (-1, +0) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
+      if n = field.growth - 1 then (
+        let m = (let c = (-1, -1) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
+        let m = (let c = (+0, -1) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
+        let m = (let c = (+1, -1) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
+        let m = (let c = (-1, +0) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
 
-        let m = let c = (+1, +0) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
-        let m = let c = (-1, +1) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
-        let m = let c = (+0, +1) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
-        let m = let c = (+1, +1) ^+ coords in if not & CoordMap.mem c map then CoordMap.add c (Beard 0) m else m in
+        let m = (let c = (+1, +0) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
+        let m = (let c = (-1, +1) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
+        let m = (let c = (+0, +1) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
+        let m = (let c = (+1, +1) ^+ coords in if (not & CoordMap.mem c map) && c <> new_robo_coords then CoordMap.add c (Beard 0) m else m) in
         CoordMap.add coords (Beard 0) m
-      else
+      ) else
         CoordMap.add coords (Beard (n + 1)) m
     end
     | _ -> map
@@ -499,6 +499,10 @@ let get_lambdas f =
 let n_beards f =
   CoordMap.cardinal & CoordMap.filter (fun k v -> match v with Beard _ -> true | _ -> false) f.f
 
+let n_earth f =
+  let n_earth = ref 0 in
+  CoordMap.iter (fun _ e -> if e = Earth then n_earth := !n_earth + 1) f.f;
+  !n_earth
 
 let rockability_score f =
   let score = ref 0
@@ -507,10 +511,11 @@ let rockability_score f =
   !score
 
 let heuristic_score f =
-  - (rockability_score f) / 4
-  - 30 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
-  - (n_beards f) * 5000
-  + f.razors * 100000
+  (* - (rockability_score f) / 4 *)
+  - 25 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
+  - (n_beards f) * 5
+  + f.razors * 10
+  - (n_earth f) * 5
   + f.score
 
 
