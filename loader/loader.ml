@@ -617,36 +617,36 @@ let solve ?(quiet=false) ?(use_signals=true) f =
 (* {{{ torture / scoring *)
 
 let torture_chambers =
-  [ "/home/w/projekti/icfp12/maps/contest1.map", 212
-  ; "/home/w/projekti/icfp12/maps/contest2.map", 281
-  ; "/home/w/projekti/icfp12/maps/contest3.map", 275
-  ; "/home/w/projekti/icfp12/maps/contest4.map", 575
-  ; "/home/w/projekti/icfp12/maps/contest5.map", 1303
-  ; "/home/w/projekti/icfp12/maps/contest6.map", 1177
-  ; "/home/w/projekti/icfp12/maps/contest7.map", 869
-  ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
-  ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
-  ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
+  [ "../maps/contest1.map", 212
+  ; "../maps/contest2.map", 281
+  ; "../maps/contest3.map", 275
+  ; "../maps/contest4.map", 575
+  ; "../maps/contest5.map", 1303
+  ; "../maps/contest6.map", 1177
+  ; "../maps/contest7.map", 869
+  ; "../maps/contest8.map", 1973
+  ; "../maps/contest9.map", 3093
+  ; "../maps/contest10.map", 3634
 
-  ; "/home/w/projekti/icfp12/maps/flood1.map", 945
-  ; "/home/w/projekti/icfp12/maps/flood2.map", 281
-  ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
-  ; "/home/w/projekti/icfp12/maps/flood4.map", 1592
-  ; "/home/w/projekti/icfp12/maps/flood5.map", 575
+  ; "../maps/flood1.map", 945
+  ; "../maps/flood2.map", 281
+  ; "../maps/flood3.map", 1303
+  ; "../maps/flood4.map", 1592
+  ; "../maps/flood5.map", 575
 
-  ; "/home/w/projekti/icfp12/maps/beard1.map", 860
-  ; "/home/w/projekti/icfp12/maps/beard2.map", 4522
-  ; "/home/w/projekti/icfp12/maps/beard3.map", 1789
-  ; "/home/w/projekti/icfp12/maps/beard4.map", 3103
-  ; "/home/w/projekti/icfp12/maps/beard5.map", 665
+  ; "../maps/beard1.map", 860
+  ; "../maps/beard2.map", 4522
+  ; "../maps/beard3.map", 1789
+  ; "../maps/beard4.map", 3103
+  ; "../maps/beard5.map", 665
 
-  ; "/home/w/projekti/icfp12/maps/trampoline1.map", 426
-  ; "/home/w/projekti/icfp12/maps/trampoline2.map", 1742
-  ; "/home/w/projekti/icfp12/maps/trampoline3.map", 5477
+  ; "../maps/trampoline1.map", 426
+  ; "../maps/trampoline2.map", 1742
+  ; "../maps/trampoline3.map", 5477
 
-  ; "/home/w/projekti/icfp12/maps/horock1.map", 758
-  ; "/home/w/projekti/icfp12/maps/horock2.map", 747
-  ; "/home/w/projekti/icfp12/maps/horock3.map", 2406
+  ; "../maps/horock1.map", 758
+  ; "../maps/horock2.map", 747
+  ; "../maps/horock3.map", 2406
   ]
 
 let torture torture_fn =
