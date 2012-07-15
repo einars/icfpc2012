@@ -268,20 +268,19 @@ let string_of_elem_at f l = peek_map f.f l $ char_of_elem
 
 let rec is_empty field c = peek_map field.f c = Empty
 
-let rec is_walkable field c =
-  (* does not check the rocks *)
-  match peek_map field.f c with
-  | Wall  -> false
-  | Beard _ -> false
+let rec turns_grimrock_to_lambda map c =
+  match peek_map map c with
+  | Wall  -> true
+  | Beard _ -> true
   | Razor -> true
   | Lambda -> true
-  | Empty -> true
+  | Empty -> false
   | Earth -> true
-  | Target _ -> false
+  | Target _ -> true
   | Trampoline _ -> true
-  | Lift  -> field.lambdas_eaten = field.total_lambdas
-  | Rock  -> true (* sic *)
-  | Grimrock  -> true (* sic *)
+  | Lift  -> true
+  | Rock  -> true
+  | Grimrock  -> true
   | SysRobot -> failwith "is_walkable got some SysRobot, that should not happen"
   | SysTrampoline _ -> failwith "is_walkable got some SysRobot, that should not happen"
 
@@ -382,8 +381,6 @@ let exec_action field ?(allow_unwalkable=false) action =
   let peek = peek_map ~robot:new_robo_coords map_after_robot_movement in
 
   let rec transform_location coords loc map =
-
-
     match loc with
     | Rock | Grimrock -> begin
       let c_bottom = coords ^+ (+0, -1)
@@ -392,25 +389,33 @@ let exec_action field ?(allow_unwalkable=false) action =
       and c_bottom_left  = coords ^+ (-1, -1)
       and c_bottom_right = coords ^+ (+1, -1) in
       let p_bottom = peek c_bottom in
-        (* BORK: grimrock falling *)
-      if peek c_bottom = Empty then (
+      if p_bottom = Empty then (
         (* akmens krīt lejā vertikāli *)
         if new_robo_coords = coords ^+ (+0, -2) then raise Bork_fallen_rock;
-        CoordMap.add c_bottom loc (CoordMap.remove coords map)
+        if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (+0, -2)) then
+          CoordMap.add c_bottom Lambda (CoordMap.remove coords map)
+        else
+          CoordMap.add c_bottom loc (CoordMap.remove coords map);
       ) else
       if (p_bottom = Rock || p_bottom = Grimrock) && peek c_right = Empty && peek c_bottom_right = Empty then (
           (* uz leju pa labi *)
           if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
-          CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
+          if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (+1, -2))
+            then CoordMap.add c_bottom_right Lambda (CoordMap.remove coords map)
+            else CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
       ) else
       if p_bottom = Lambda && peek c_right = Empty && peek c_bottom_right = Empty then (
           (* uz leju pa labi *)
           if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
-          CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
+          if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (+1, -2))
+            then CoordMap.add c_bottom_right Lambda (CoordMap.remove coords map)
+            else CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
       ) else
       if (p_bottom = Rock || p_bottom = Grimrock) && (peek c_left = Empty && peek c_bottom_left = Empty) && (peek c_right <> Empty || peek c_bottom_right <> Empty) then (
         if new_robo_coords = coords ^+ (-1, -2) then raise Bork_fallen_rock;
-        CoordMap.add c_bottom_left loc (CoordMap.remove coords map)
+        if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (-1, -2))
+          then CoordMap.add c_bottom_left Lambda (CoordMap.remove coords map)
+          else CoordMap.add c_bottom_left loc (CoordMap.remove coords map)
       ) else
       map
     end
@@ -517,7 +522,7 @@ let proper_solution_from_move_list move_list =
 
 let solve ?(quiet=false) ?(use_signals=true) f =
 
-  let h = (snd f.dimensions) and w = (fst f.dimensions) in
+  let w,h = f.dimensions in
 
   let astar = make_2d_array (h + 1) (w + 1) [] in
 
