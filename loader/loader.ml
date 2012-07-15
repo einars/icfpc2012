@@ -47,7 +47,7 @@ let make_2d_array n m init =
 
 (* }}} *)
 
-type elem = Wall | Rock | Lift | Earth | Empty | Lambda | Beard of int | Razor | Target of int | Trampoline of int | SysRobot | SysTrampoline of string
+type elem = Wall | Rock | Grimrock | Lift | Earth | Empty | Lambda | Beard of int | Razor | Target of int | Trampoline of int | SysRobot | SysTrampoline of string
 
 let initial_robot_coordinates = ref (0,0)
 
@@ -55,7 +55,7 @@ type field =
   { f: elem CoordMap.t
   ; dimensions: coords
   ; score: int
-  ; lambdas: int
+  ; total_lambdas: int
   ; lambdas_eaten: int
   ; robot: coords
   ; is_complete: bool
@@ -77,7 +77,7 @@ type field =
 
 let rec count_lambdas f =
   let n = ref 0 in
-  CoordMap.iter (fun coords elem -> if elem = Lambda then n := !n + 1) f;
+  CoordMap.iter (fun coords elem -> if elem = Lambda || elem = Grimrock then n := !n + 1) f;
   !n
 
 
@@ -112,15 +112,16 @@ let load_char = function
   | '7'-> Target 7, false
   | '8'-> Target 8, false
   | '9'-> Target 9, false
-  | '@' -> log "Unknown char @, treating as a rock"; Rock, false
+  | '@' -> Grimrock, false
   | c -> log "Unknown char %c, treating as a wall" c; Wall, false
 
-let char_of_elem ?(lambdas = 1) = function
+let char_of_elem ?(exit_open = false) = function
   | Wall -> "▓"
   | Earth -> "·"
   | Empty -> " "
-  | Lift -> if lambdas = 0 then "@" else "#"
+  | Lift -> if exit_open then "@" else "#"
   | Rock -> "O"
+  | Grimrock -> "@"
   | Lambda -> "λ"
   | Beard _ -> "W"
   | Razor _ -> "!"
@@ -151,6 +152,7 @@ let load_line ~trammap pos s accum =
       | Lambda -> CoordMap.add ps Lambda rest
       | Beard _ -> CoordMap.add ps (Beard 0) rest
       | Target n -> CoordMap.add ps (Target n) rest
+      | Grimrock -> CoordMap.add ps Grimrock rest
       | SysTrampoline s -> CoordMap.add ps (Trampoline (decode_trammap s trammap)) rest
       | Empty -> rest
       | SysRobot -> failwith "I certainly didn't expect Robot in response to load_char"
@@ -208,7 +210,7 @@ let load_field lines =
       CoordMap.empty
   ; is_complete = false
   ; score = 0
-  ; lambdas = count_lambdas loaded_field
+  ; total_lambdas = count_lambdas loaded_field
   ; lambdas_eaten = 0
   ; dimensions = dimensions
   ; robot = invert_y dimensions !initial_robot_coordinates
@@ -237,7 +239,7 @@ let print_field ?(clear=true) f =
   let rx, ry = f.robot in repr.(ry).(rx) <- "R";
 
 
-  CoordMap.iter (fun (x,y) elem -> repr.(y).(x) <- char_of_elem ~lambdas:f.lambdas elem) f.f;
+  CoordMap.iter (fun (x,y) elem -> repr.(y).(x) <- char_of_elem ~exit_open:(f.total_lambdas = f.lambdas_eaten) elem) f.f;
 
   for j = 1 to h do
     printf "%s" (if (h - j >= f.water) then " " else "~");
@@ -249,7 +251,7 @@ let print_field ?(clear=true) f =
   done;
 
   log "";
-  log "\nscore=%d eaten=%d/%d razors=%d" f.score f.lambdas_eaten (f.lambdas_eaten + f.lambdas) f.razors;
+  log "\nscore=%d eaten=%d/%d razors=%d" f.score f.lambdas_eaten f.total_lambdas f.razors;
   log "water=%d/%d flooding=%d wetness=%d/%d growth=%d" f.water f.cur_water f.flooding f.cur_wetness f.waterproof f.growth;
   List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
   ()
@@ -277,8 +279,9 @@ let rec is_walkable field c =
   | Earth -> true
   | Target _ -> false
   | Trampoline _ -> true
-  | Lift  -> field.lambdas = 0
+  | Lift  -> field.lambdas_eaten = field.total_lambdas
   | Rock  -> true (* sic *)
+  | Grimrock  -> true (* sic *)
   | SysRobot -> failwith "is_walkable got some SysRobot, that should not happen"
   | SysTrampoline _ -> failwith "is_walkable got some SysRobot, that should not happen"
 
@@ -355,11 +358,18 @@ let exec_action field ?(allow_unwalkable=false) action =
   | Razor -> new_robo_coords, CoordMap.remove new_robo_coords map
   | Earth -> new_robo_coords, CoordMap.remove new_robo_coords map
   | Lambda -> new_robo_coords, CoordMap.remove new_robo_coords map
-  | Lift -> if field.lambdas = 0 then raise (Finished (field.score + 25 * field.lambdas_eaten - 1)) else raise Bork_unwalkable
+  | Lift -> if field.total_lambdas = field.lambdas_eaten then raise (Finished (field.score + 25 * field.lambdas_eaten - 1)) else raise Bork_unwalkable
   | Rock ->
         let rock_moved_to = (if action = "L" then new_robo_coords ^+ (-1, 0) else if action = "R" then new_robo_coords ^+ (1, 0) else raise Bork_unwalkable) in
         if not & CoordMap.mem rock_moved_to map then (
           new_robo_coords, CoordMap.add rock_moved_to Rock (CoordMap.remove new_robo_coords map)
+        ) else (
+          raise Bork_unwalkable
+        )
+  | Grimrock ->
+        let rock_moved_to = (if action = "L" then new_robo_coords ^+ (-1, 0) else if action = "R" then new_robo_coords ^+ (1, 0) else raise Bork_unwalkable) in
+        if not & CoordMap.mem rock_moved_to map then (
+          new_robo_coords, CoordMap.add rock_moved_to Grimrock (CoordMap.remove new_robo_coords map)
         ) else (
           raise Bork_unwalkable
         )
@@ -375,30 +385,32 @@ let exec_action field ?(allow_unwalkable=false) action =
 
 
     match loc with
-    | Rock -> begin
+    | Rock | Grimrock -> begin
       let c_bottom = coords ^+ (+0, -1)
       and c_left   = coords ^+ (-1, +0)
       and c_right  = coords ^+ (+1, +0)
       and c_bottom_left  = coords ^+ (-1, -1)
       and c_bottom_right = coords ^+ (+1, -1) in
+      let p_bottom = peek c_bottom in
+        (* BORK: grimrock falling *)
       if peek c_bottom = Empty then (
         (* akmens krīt lejā vertikāli *)
         if new_robo_coords = coords ^+ (+0, -2) then raise Bork_fallen_rock;
-        CoordMap.add c_bottom Rock (CoordMap.remove coords map)
+        CoordMap.add c_bottom loc (CoordMap.remove coords map)
       ) else
-      if peek c_bottom = Rock && peek c_right = Empty && peek c_bottom_right = Empty then (
+      if (p_bottom = Rock || p_bottom = Grimrock) && peek c_right = Empty && peek c_bottom_right = Empty then (
           (* uz leju pa labi *)
           if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
-          CoordMap.add c_bottom_right Rock (CoordMap.remove coords map)
+          CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
       ) else
-      if peek c_bottom = Lambda && peek c_right = Empty && peek c_bottom_right = Empty then (
+      if p_bottom = Lambda && peek c_right = Empty && peek c_bottom_right = Empty then (
           (* uz leju pa labi *)
           if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
-          CoordMap.add c_bottom_right Rock (CoordMap.remove coords map)
+          CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
       ) else
-      if peek c_bottom = Rock && (peek c_left = Empty && peek c_bottom_left = Empty) && (peek c_right <> Empty || peek c_bottom_right <> Empty) then (
+      if (p_bottom = Rock || p_bottom = Grimrock) && (peek c_left = Empty && peek c_bottom_left = Empty) && (peek c_right <> Empty || peek c_bottom_right <> Empty) then (
         if new_robo_coords = coords ^+ (-1, -2) then raise Bork_fallen_rock;
-        CoordMap.add c_bottom_left Rock (CoordMap.remove coords map)
+        CoordMap.add c_bottom_left loc (CoordMap.remove coords map)
       ) else
       map
     end
@@ -439,7 +451,6 @@ let exec_action field ?(allow_unwalkable=false) action =
     f = nf;
     score = field.score + score_diff;
     moves_taken = action :: field.moves_taken;
-    lambdas = count_lambdas nf;
     lambdas_eaten = field.lambdas_eaten + lambda_diff;
     robot = new_robo_coords;
 
@@ -495,7 +506,7 @@ let rockability_score f =
 
 let lambda_manhattan_score f =
   - (rockability_score f) / 4
-  - 25 * f.lambdas * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
+  - 25 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
   - (n_beards f) * 5
   + f.razors * 5
   + f.score
