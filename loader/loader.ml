@@ -523,12 +523,18 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/contest7.map", 869
   ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
   ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
-  ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
+  (* ; "/home/w/projekti/icfp12/maps/contest10.map", 3634 *)
   ; "/home/w/projekti/icfp12/maps/flood1.map", 945
   ; "/home/w/projekti/icfp12/maps/flood2.map", 281
   ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
   ; "/home/w/projekti/icfp12/maps/flood4.map", 1592
   ; "/home/w/projekti/icfp12/maps/flood5.map", 575
+
+  ; "/home/w/projekti/icfp12/maps/beard1.map", 860
+  ; "/home/w/projekti/icfp12/maps/beard2.map", 4518
+  (* ; "/home/w/projekti/icfp12/maps/beard3.map", 1789 *)
+  ; "/home/w/projekti/icfp12/maps/beard4.map", 3013
+  (* ; "/home/w/projekti/icfp12/maps/beard5.map", 664 *)
   ]
 
 let torture torture_fn =
