@@ -579,77 +579,76 @@ let apply_solution field some_moves =
 
 type solver_record = Blank | JustSolution of string * int * int | History of field * int
 
+let coma = ref CoordMap.empty
+let coma_ongoing = ref true
+
 let solve ?(quiet=false) ?(use_signals=true) f =
 
-  let w,h = f.dimensions in
-
-  let astar = make_2d_array (h + 1) (w + 1) Blank in
-
-  let rec process_astar x y =
-    let astar_put_score new_field =
-      let nx,ny = new_field.robot in match astar.(ny).(nx) with
-      | JustSolution (_, hscore, _)
-      | History (_, hscore) ->
-          if hscore < heuristic_score new_field then (
-            astar.(ny).(nx) <- History (new_field, heuristic_score new_field);
-            1
-          ) else 0
+  let induce_coma map field action = (
+    try
+      let morphed = do_action field action in
+      let morphed_hscore = (heuristic_score morphed) in
+      if not (CoordMap.mem morphed.robot map) then (
+        coma_ongoing := true;
+        CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
+      ) else match CoordMap.find morphed.robot map with
+        | JustSolution (_, hscore, _)
+        | History (_, hscore) ->
+          if hscore < morphed_hscore then (
+            coma_ongoing := true;
+            CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
+          ) else map
       | Blank ->
-          astar.(ny).(nx) <- History ( new_field, heuristic_score new_field );
-          1;
-    in
-    match astar.(y).(x) with
-    | JustSolution _ -> 0
-    | Blank -> 0
-    | History (old_field, old_score) ->
-        let res =
-          (try ( astar_put_score & do_action old_field "D") with _ -> 0) +
-          (try ( astar_put_score & do_action old_field "L") with _ -> 0) +
-          (try ( astar_put_score & do_action old_field "U") with _ -> 0) +
-          (try ( astar_put_score & do_action old_field "R") with _ -> 0) +
-          (if old_field.razors > 0 then (try ( astar_put_score & do_action old_field "S") with _ -> 0) else 0)
-        in
-        begin match astar.(y).(x) with
-        | Blank -> ()
+          coma_ongoing := true;
+          CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
+    with _ -> map
+  )
+
+  in
+
+
+
+  let process_coma coords slv new_coma =
+    match slv with
+    | JustSolution _ -> new_coma
+    | Blank -> new_coma
+    | History (old_field, old_score) -> (
+        let m = new_coma in
+        let m = induce_coma m old_field "D" in
+        let m = induce_coma m old_field "L" in
+        let m = induce_coma m old_field "U" in
+        let m = induce_coma m old_field "R" in
+        let m = if old_field.razors > 0 then induce_coma m old_field "S" else m in
+        begin match CoordMap.find coords m with
+        | Blank -> m
         | JustSolution (_, score_check, _)
-        | History (_, score_check) -> if score_check = old_score then astar.(y).(x) <- JustSolution (old_field.moves_taken, (heuristic_score old_field), old_field.score);
-        end;
-        res
+        | History (_, score_check) ->
+            if score_check = old_score
+            then CoordMap.add coords (JustSolution (old_field.moves_taken, (heuristic_score old_field), old_field.score)) m
+            else m
+        end
+    )
   in
-
-  let rec process_frontier () =
-    if not quiet then printf ".%!";
-    let had_modifications = ref 0 in
-    for j = 1 to h do
-      for k = 1 to w do
-        had_modifications := !had_modifications + process_astar k j
-      done;
-    done;
-    if !had_modifications > 0 then process_frontier ()
-  in
-
   let retrieve_best_solution () =
     let top_score = ref (-999999)
     and top_hscore = ref (-999999)
     and top_solution = ref "A" in
-    for j = 1 to h do
-      for k = 1 to w do
-        match astar.(j).(k) with
-        | History (current_best, hscore) ->
-            if current_best.score > !top_score then (
-              top_solution := current_best.moves_taken;
-              top_score := current_best.score;
-              top_hscore := hscore;
-            )
-        | JustSolution (solution, hscore, score) ->
-            if score > !top_score then (
-              top_solution := solution;
-              top_score := score;
-              top_hscore := hscore;
-            )
-        | Blank -> ()
-      done;
-    done;
+      CoordMap.iter (fun coords elem ->
+          match elem with
+          | History (current_best, hscore) ->
+              if current_best.score > !top_score then (
+                top_solution := current_best.moves_taken;
+                top_score := current_best.score;
+                top_hscore := hscore;
+              )
+          | JustSolution (solution, hscore, score) ->
+              if score > !top_score then (
+                top_solution := solution;
+                top_score := score;
+                top_hscore := hscore;
+              )
+          | Blank -> ()
+      ) !coma;
 
     (* log "Retrieved %s as best (score=%d, hscore=%d)" !top_solution !top_score !top_hscore; *)
 
@@ -664,8 +663,14 @@ let solve ?(quiet=false) ?(use_signals=true) f =
       exit 0;
   ));
 
-  let x,y = f.robot in astar.(y).(x) <- History (f, heuristic_score f);
-  process_frontier ();
+  coma := CoordMap.add f.robot (History (f, heuristic_score f)) CoordMap.empty;
+
+  coma_ongoing := true;
+  while !coma_ongoing do
+    if not quiet then printf ".%!";
+    coma_ongoing := false;
+    coma := CoordMap.fold process_coma !coma !coma;
+  done;
 
   if use_signals then Sys.set_signal Sys.sigint Sys.Signal_default;
 
