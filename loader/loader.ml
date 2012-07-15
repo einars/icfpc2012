@@ -312,7 +312,7 @@ let shave_map_at (sx, sy) map =
   shaven_map
 
 
-let exec_action field ?(allow_unwalkable=false) action =
+let exec_action field action =
 
   if field.is_complete then raise Bork_finished;
 
@@ -466,9 +466,9 @@ let exec_action field ?(allow_unwalkable=false) action =
     razors = new_razors;
   }
 
-let do_action field ?(allow_unwalkable=false) action = (
+let do_action field action = (
   try
-    exec_action field ~allow_unwalkable:allow_unwalkable action
+    exec_action field action
   with
     | Finished total_score-> { field with
         is_complete = true;
@@ -477,11 +477,12 @@ let do_action field ?(allow_unwalkable=false) action = (
     }
   )
 
+
 let animate_solution field winning_moves =
   let exploded_moves = String.explode winning_moves $ List.map String.of_char $ List.rev in
   List.fold_right
       (fun action field ->
-        let nf = do_action field ~allow_unwalkable:true action in
+        let nf = do_action field action in
         ignore(Unix.select [] [] [] 0.05);
         print_field nf;
         nf
@@ -489,7 +490,8 @@ let animate_solution field winning_moves =
 
 let apply_solution field some_moves =
   let exploded_moves = String.explode some_moves $ List.map String.of_char $ List.rev in
-  List.fold_right (fun action field -> do_action ~allow_unwalkable:true field action) exploded_moves field
+  List.fold_right (fun action field -> do_action field action) exploded_moves field
+
 
 let manhattan_distance (ax, ay) (bx, by) = (1 + bx - ax $ abs) + (1 + by - ay $ abs)
 
@@ -679,35 +681,20 @@ in
 
 (* }}} *)
 
-
 (* {{{ run_tests *)
 
   let run_tests () =
-  let waffle ?(print=true) cmds f =
-    let grr = ref f in
-    if print then print_field !grr;
-    for i = 0 to pred & String.length cmds do
-      grr := do_action !grr (String.get cmds i $ Std.string_of_char);
-      if print then print_field !grr;
-    done;
-    !grr
 
-  in
-  let f = waffle ~print:false "LDRDDUULLLDDL" & load_field & lines_of_file "../maps/contest1.map" in
-  assert (f.score = 212);
-  let f = waffle ~print:false "RRUDRRULURULLLLDDDL" & load_field & lines_of_file "../maps/contest2.map" in
-  assert (f.score = 281);
-  let f = waffle ~print:false "LDDDRRRRDDLLLLLDURRRUURRR" & load_field & lines_of_file "../maps/contest3.map" in
-  assert (f.score = 275);
+  let c1 = load_field & lines_of_file "../maps/contest1.map"
+  and c2 = load_field & lines_of_file "../maps/contest2.map"
+  and c3 = load_field & lines_of_file "../maps/contest3.map" in
+  let f = apply_solution c1 "LDRDDUULLLDDL" in assert (f.score = 212);
+  let f = apply_solution c2 "RRUDRRULURULLLLDDDL" in assert (f.score = 281);
+  let f = apply_solution c3 "LDDDRRRRDDLLLLLDURRRUURRR" in assert (f.score = 275);
 
-  let n = proper_solution_from_move_list ["A"; "B"; "C"] in
-  assert (n = "CBA");
-
-  let n = rstrip " ABC " in
-  assert (n = " ABC");
-
-  let n = make_trammap "A targets 1" in
-  assert (n = ("A", 1));
+  assert ("CBA" = proper_solution_from_move_list ["A"; "B"; "C"]);
+  assert (" ABC" = rstrip " ABC ");
+  assert ( ("A", 1) = make_trammap "A targets 1");
 
   log "Tests passed"
 
