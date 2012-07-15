@@ -512,6 +512,7 @@ let do_action field action = (
   )
 
 
+(* {{{ Heuristics *)
 
 let manhattan_distance (ax, ay) (bx, by) = (1 + bx - ax $ abs) + (1 + by - ay $ abs)
 
@@ -547,11 +548,13 @@ let heuristic_score f =
     (is_blocked f (lift ^+ (0,1))) &&
     (is_blocked f (lift ^- (0,1))) in
 
+  - 25 * (f.total_lambdas - f.lambdas_eaten) * (List.fold_left (fun sum lambda_coords -> sum + (manhattan_distance lambda_coords f.robot)) 0  (get_lambdas f))
   + f.path_excitement
   + if lift_is_stoned then (-9000) else 0
   + (if f.is_complete then 10000000 else 0)
   + (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then 1000000 else 0)
   - 50 * (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then manhattan_distance lift f.robot else 0)
+  - (n_beards f) * 5
   (*
   - 50 * (if f.total_lambdas = f.lambdas_eaten then manhattan_distance (lift_coords f) f.robot else 0)
   *)
@@ -560,9 +563,12 @@ let heuristic_score f =
   - (n_beards f) * 5
   + f.razors * 10
   - (n_earth f) * 5
+  + f.score
   *)
-  (* + f.score *)
 
+(* }}} *)
+
+(* {{{ animate_solution *)
 let animate_solution field winning_moves =
   let exploded_moves = String.explode winning_moves $ List.map String.of_char $ List.rev in
   List.fold_right
@@ -576,6 +582,9 @@ let animate_solution field winning_moves =
 let apply_solution field some_moves =
   List.fold_left do_action field & String.explode some_moves $ List.map String.of_char
 
+(* }}} *)
+
+(* {{{ Coma solver *)
 
 type solver_record = Blank | JustSolution of string * int * int | History of field * int
 
@@ -584,7 +593,7 @@ let coma_ongoing = ref true
 
 let solve ?(quiet=false) ?(use_signals=true) f =
 
-  let induce_coma map field action = (
+  let rec induce_coma map field action = (
     try
       let morphed = do_action field action in
       let morphed_hscore = (heuristic_score morphed) in
@@ -592,12 +601,23 @@ let solve ?(quiet=false) ?(use_signals=true) f =
         coma_ongoing := true;
         CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
       ) else match CoordMap.find morphed.robot map with
-        | JustSolution (_, hscore, _)
-        | History (_, hscore) ->
+        | JustSolution (_, hscore, _) ->
           if hscore < morphed_hscore then (
             coma_ongoing := true;
             CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
           ) else map
+        | History (nice_state, hscore) ->
+          (* overwriting a fresh, perfectly nice solution *)
+            if hscore < morphed_hscore then (
+              (*
+              log "--------------------------------------------------";
+              log "**** OVERWRITE h=%d" hscore;
+              print_field ~heuristics:hscore ~clear:false nice_state;
+              log "**** With %d" morphed_hscore;
+              print_field ~heuristics:morphed_hscore ~clear:false morphed;
+              *)
+              CoordMap.add morphed.robot (History (morphed, morphed_hscore)) map
+            ) else map
       | Blank ->
           coma_ongoing := true;
           CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
@@ -676,6 +696,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
 
   retrieve_best_solution ()
 
+(* }}} *)
 
 (* {{{ torture / scoring *)
 
