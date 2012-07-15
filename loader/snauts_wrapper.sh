@@ -4,6 +4,6 @@
 
 snauts_pid=$!
 
-sleep 4
+sleep 3
 kill -INT $snauts_pid 2>/dev/null
 

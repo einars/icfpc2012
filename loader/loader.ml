@@ -94,7 +94,8 @@ let load_char = function
   | '\\'-> Lambda, false
   | 'W'-> Beard 0, false
   | '!'-> Razor, false
-  | c -> failwithf "Unknown char %c" c
+  | '@' -> log "Unknown char @, treating as a rock"; Rock, false
+  | c -> log "Unknown char %c, treating as a wall" c; Wall, false
 
 let char_of_elem ?(lambdas = 1) = function
   | Wall -> "▓"
@@ -141,13 +142,12 @@ let invert_y dimensions pos =
 let parse_metadata lines =
   let rec loop water flooding waterproof growth razors = function
   | l :: rest -> let k, v = String.split (String.strip l) " " in
-    let nv = String.to_int v in
-         if k = "Water"      then loop (nv)  flooding waterproof growth razors rest
-    else if k = "Flooding"   then loop water (nv)     waterproof growth razors rest
-    else if k = "Waterproof" then loop water flooding (nv)       growth razors rest
-    else if k = "Growth"     then loop water flooding waterproof (nv)   razors rest
-    else if k = "Razors"     then loop water flooding waterproof growth (nv)   rest
-    else failwithf "Unknown metadata key %s" k
+         if k = "Water"      then loop (String.to_int v)  flooding waterproof growth razors rest
+    else if k = "Flooding"   then loop water (String.to_int v)     waterproof growth razors rest
+    else if k = "Waterproof" then loop water flooding (String.to_int v)       growth razors rest
+    else if k = "Growth"     then loop water flooding waterproof (String.to_int v)   razors rest
+    else if k = "Razors"     then loop water flooding waterproof growth (String.to_int v)   rest
+    else ( log "Unknown metadata key %s" k; loop water flooding waterproof growth razors rest );
   | _ -> water, flooding, waterproof, growth, razors
   in loop 0 0 10 25 0 lines
 
@@ -524,6 +524,7 @@ let torture_chambers =
   ; "/home/w/projekti/icfp12/maps/contest8.map", 1973
   ; "/home/w/projekti/icfp12/maps/contest9.map", 3093
   ; "/home/w/projekti/icfp12/maps/contest10.map", 3634
+
   ; "/home/w/projekti/icfp12/maps/flood1.map", 945
   ; "/home/w/projekti/icfp12/maps/flood2.map", 281
   ; "/home/w/projekti/icfp12/maps/flood3.map", 1303
@@ -532,19 +533,32 @@ let torture_chambers =
 
   ; "/home/w/projekti/icfp12/maps/beard1.map", 860
   ; "/home/w/projekti/icfp12/maps/beard2.map", 4518
-  (* ; "/home/w/projekti/icfp12/maps/beard3.map", 1789 *)
+  ; "/home/w/projekti/icfp12/maps/beard3.map", 1789
   ; "/home/w/projekti/icfp12/maps/beard4.map", 3013
-  (* ; "/home/w/projekti/icfp12/maps/beard5.map", 664 *)
+  ; "/home/w/projekti/icfp12/maps/beard5.map", 664
+
+  ; "/home/w/projekti/icfp12/maps/trampoline1.map", 426
+  ; "/home/w/projekti/icfp12/maps/trampoline2.map", 1742
+  ; "/home/w/projekti/icfp12/maps/trampoline3.map", 5477
+
+  ; "/home/w/projekti/icfp12/maps/horock1.map", 758
+  ; "/home/w/projekti/icfp12/maps/horock2.map", 747
+  ; "/home/w/projekti/icfp12/maps/horock3.map", 2403
   ]
 
 let torture torture_fn =
   let tortured_total, best_possible_total =
   List.fold_left (fun  (tortured_total, best_possible_total) (map, best_possible_score) ->
-    let field = load_field & lines_of_file & map
-    and solution = torture_fn map in
-    let solved_field = apply_solution field solution in
-    log "%s: %3d%% %4d of %4d" map (solved_field.score * 100 / best_possible_score) solved_field.score best_possible_score;
-    (tortured_total + solved_field.score, best_possible_total + best_possible_score)
+
+    let solved_score = (try
+      let field = load_field & lines_of_file & map in
+      let solved_field = apply_solution field & torture_fn map in
+      solved_field.score
+     with _ -> 0
+    ) in
+
+    log "%s: %3d%% %4d of %4d" map (solved_score * 100 / best_possible_score) solved_score best_possible_score;
+    (tortured_total + solved_score, best_possible_total + best_possible_score)
   ) (0,0) torture_chambers in
   log "TOTAL: %4d of %d, %d%%" tortured_total best_possible_total (tortured_total * 100 / best_possible_total)
 
