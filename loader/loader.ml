@@ -59,7 +59,7 @@ type field =
   ; lambdas_eaten: int
   ; robot: coords
   ; is_complete: bool
-  ; moves_taken: string list
+  ; moves_taken: string
 
   ; water: int
   ; flooding: int
@@ -214,7 +214,7 @@ let load_field lines =
   ; lambdas_eaten = 0
   ; dimensions = dimensions
   ; robot = invert_y dimensions !initial_robot_coordinates
-  ; moves_taken = []
+  ; moves_taken = ""
 
   ; waterproof = waterproof
   ; flooding = flooding
@@ -228,7 +228,7 @@ let load_field lines =
   }
 
 
-let print_field ?(clear=true) f =
+let print_field ?(clear=true) ?(heuristics=0) f =
   let w, h = f.dimensions in
   let repr = make_2d_array (h + 1) (w + 1) " " in
 
@@ -253,7 +253,8 @@ let print_field ?(clear=true) f =
   log "";
   log "\nscore=%d eaten=%d/%d razors=%d" f.score f.lambdas_eaten f.total_lambdas f.razors;
   log "water=%d/%d flooding=%d wetness=%d/%d growth=%d" f.water f.cur_water f.flooding f.cur_wetness f.waterproof f.growth;
-  List.iter (fun c -> printf "%s" c) (List.rev f.moves_taken);
+  if heuristics <> 0 then log "Heuristics = %d" heuristics;
+  log "%s" f.moves_taken;
   ()
 
 (* }}} *)
@@ -455,7 +456,7 @@ let exec_action field action =
   { field with
     f = nf;
     score = field.score + score_diff;
-    moves_taken = action :: field.moves_taken;
+    moves_taken = field.moves_taken ^ action;
     lambdas_eaten = field.lambdas_eaten + lambda_diff;
     robot = new_robo_coords;
 
@@ -473,7 +474,7 @@ let do_action field action = (
     | Finished total_score-> { field with
         is_complete = true;
         score = total_score;
-        moves_taken = action :: field.moves_taken;
+        moves_taken = field.moves_taken ^ action;
     }
   )
 
@@ -518,41 +519,47 @@ let heuristic_score f =
   + f.razors * 5
   + f.score
 
-let proper_solution_from_move_list move_list =
-  String.join "" (List.rev move_list)
 
+type solver_record = Blank | JustSolution of string * int * int | History of field * int
 
 let solve ?(quiet=false) ?(use_signals=true) f =
 
   let w,h = f.dimensions in
 
-  let astar = make_2d_array (h + 1) (w + 1) None in
+  let astar = make_2d_array (h + 1) (w + 1) Blank in
 
-  let rec process_astar ff =
-    let astar_put_score f =
-      let x,y = f.robot in match astar.(y).(x) with
-      | Some (current_best, hscore) ->
-          if hscore < heuristic_score f then (
-            astar.(y).(x) <- Some ({ f with solver_touched = false }, heuristic_score f);
+  let rec process_astar x y =
+    let astar_put_score new_field =
+      let nx,ny = new_field.robot in match astar.(ny).(nx) with
+      | JustSolution (_, hscore, _)
+      | History (_, hscore) ->
+          if hscore < heuristic_score new_field then (
+            astar.(ny).(nx) <- History (new_field, heuristic_score new_field);
             1
           ) else (
             0
           )
-      | None ->
-          astar.(y).(x) <- Some ( { f with solver_touched = false }, heuristic_score f );
+      | Blank ->
+          astar.(ny).(nx) <- History ( new_field, heuristic_score new_field );
           1;
     in
-    if ff.solver_touched $ not then (
-      let res =
-      (try ( astar_put_score & do_action ff "U") with _ -> 0) +
-      (try ( astar_put_score & do_action ff "D") with _ -> 0) +
-      (try ( astar_put_score & do_action ff "L") with _ -> 0) +
-      (try ( astar_put_score & do_action ff "R") with _ -> 0) +
-      (try ( astar_put_score & do_action ff "S") with _ -> 0)
-      in
-      ff.solver_touched <- true;
-      res
-    ) else 0
+    match astar.(y).(x) with
+    | JustSolution _ -> 0
+    | Blank -> 0
+    | History (old_field, old_score) ->
+        let res =
+          (try ( astar_put_score & do_action old_field "U") with _ -> 0) +
+          (try ( astar_put_score & do_action old_field "D") with _ -> 0) +
+          (try ( astar_put_score & do_action old_field "L") with _ -> 0) +
+          (try ( astar_put_score & do_action old_field "R") with _ -> 0) +
+          (if old_field.razors > 0 then (try ( astar_put_score & do_action old_field "S") with _ -> 0) else 0)
+        in
+        begin match astar.(y).(x) with
+        | Blank -> ()
+        | JustSolution (_, score_check, _)
+        | History (_, score_check) -> if score_check = old_score then astar.(y).(x) <- JustSolution (old_field.moves_taken, (heuristic_score old_field), old_field.score);
+        end;
+        res
   in
 
   let rec process_frontier () =
@@ -560,52 +567,54 @@ let solve ?(quiet=false) ?(use_signals=true) f =
     let had_modifications = ref 0 in
     for j = 1 to h do
       for k = 1 to w do
-        match astar.(j).(k) with
-        | None -> ()
-        | Some (current_best, _) -> had_modifications := !had_modifications + process_astar current_best;
+        had_modifications := !had_modifications + process_astar k j
       done;
     done;
     if !had_modifications > 0 then process_frontier ()
   in
 
+  let retrieve_best_solution () =
+    let top_score = ref (-999999)
+    and top_hscore = ref (-999999)
+    and top_solution = ref "A" in
+    for j = 1 to h do
+      for k = 1 to w do
+        match astar.(j).(k) with
+        | History (current_best, hscore) ->
+            if current_best.score > !top_score then (
+              top_solution := current_best.moves_taken;
+              top_score := current_best.score;
+              top_hscore := hscore;
+            )
+        | JustSolution (solution, hscore, score) ->
+            if score > !top_score then (
+              top_solution := solution;
+              top_score := score;
+              top_hscore := hscore;
+            )
+        | Blank -> ()
+      done;
+    done;
+
+    (* log "Retrieved %s as best (score=%d, hscore=%d)" !top_solution !top_score !top_hscore; *)
+
+    !top_solution
+
+  in
+
+
   if use_signals then Sys.set_signal Sys.sigint (Sys.Signal_handle (fun _ ->
       Sys.set_signal Sys.sigint Sys.Signal_default;
-      let maximum = ref f in
-
-      for j = 1 to h do
-        for k = 1 to w do
-          match astar.(j).(k) with
-          | Some (current_best, hscore) -> if current_best.score > !maximum.score then maximum := current_best
-          | None -> ()
-        done;
-      done;
-      let solution = if !maximum.is_complete
-      then !maximum.moves_taken
-      else "A" :: !maximum.moves_taken in
-      animate_solution f (proper_solution_from_move_list solution);
+      log "%s" & retrieve_best_solution ();
       exit 0;
   ));
 
-  let x,y = f.robot in astar.(y).(x) <- Some (f, heuristic_score f);
+  let x,y = f.robot in astar.(y).(x) <- History (f, heuristic_score f);
   process_frontier ();
 
   if use_signals then Sys.set_signal Sys.sigint Sys.Signal_default;
 
-  let maximum = ref f in
-
-  for j = 1 to h do
-    for k = 1 to w do
-      match astar.(j).(k) with
-      | Some (current_best, hscore) -> if current_best.score > !maximum.score then maximum := current_best
-      | None -> ()
-    done
-  done;
-  let solution =
-    if !maximum.is_complete
-    then !maximum.moves_taken
-    else "A" :: !maximum.moves_taken
-  in
-  (proper_solution_from_move_list solution)
+  retrieve_best_solution ()
 
 
 (* {{{ torture / scoring *)
@@ -692,7 +701,6 @@ in
   let f = apply_solution c2 "RRUDRRULURULLLLDDDL" in assert (f.score = 281);
   let f = apply_solution c3 "LDDDRRRRDDLLLLLDURRRUURRR" in assert (f.score = 275);
 
-  assert ("CBA" = proper_solution_from_move_list ["A"; "B"; "C"]);
   assert (" ABC" = rstrip " ABC ");
   assert ( ("A", 1) = make_trammap "A targets 1");
 
