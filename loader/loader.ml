@@ -47,7 +47,7 @@ let make_2d_array n m init =
 
 (* }}} *)
 
-type elem = Wall | Rock | Lift | Earth | Empty | Lambda | Beard of int | Razor | SysRobot
+type elem = Wall | Rock | Lift | Earth | Empty | Lambda | Beard of int | Razor | Target of int | Trampoline of int | SysRobot | SysTrampoline of string
 
 let initial_robot_coordinates = ref (0,0)
 
@@ -94,6 +94,24 @@ let load_char = function
   | '\\'-> Lambda, false
   | 'W'-> Beard 0, false
   | '!'-> Razor, false
+  | 'A'-> SysTrampoline "A", false
+  | 'B'-> SysTrampoline "B", false
+  | 'C'-> SysTrampoline "C", false
+  | 'D'-> SysTrampoline "D", false
+  | 'E'-> SysTrampoline "E", false
+  | 'F'-> SysTrampoline "F", false
+  | 'G'-> SysTrampoline "G", false
+  | 'H'-> SysTrampoline "H", false
+  | 'I'-> SysTrampoline "I", false
+  | '1'-> Target 1, false
+  | '2'-> Target 2, false
+  | '3'-> Target 3, false
+  | '4'-> Target 4, false
+  | '5'-> Target 5, false
+  | '6'-> Target 6, false
+  | '7'-> Target 7, false
+  | '8'-> Target 8, false
+  | '9'-> Target 9, false
   | '@' -> log "Unknown char @, treating as a rock"; Rock, false
   | c -> log "Unknown char %c, treating as a wall" c; Wall, false
 
@@ -106,10 +124,16 @@ let char_of_elem ?(lambdas = 1) = function
   | Lambda -> "λ"
   | Beard _ -> "W"
   | Razor _ -> "!"
+  | Target _ -> "t"
+  | Trampoline _ -> "T"
+  | SysTrampoline _ -> failwith "char_of_elem certainly didn't expect any SysTrampoline"
   | SysRobot -> failwith "char_of_elem certainly didn't expect any Robot"
 
+let rec decode_trammap s = function
+  | h::t -> if fst h = s then snd h else decode_trammap s t
+  | _ -> failwithf "Unknown trampoline %s" s
 
-let load_line pos s accum =
+let load_line ~trammap pos s accum =
   let rec loop ps inner_accum =
     let index = (fst ps) - 1 in
     if String.length s <= index then inner_accum
@@ -126,8 +150,11 @@ let load_line pos s accum =
       | Earth -> CoordMap.add ps Earth rest
       | Lambda -> CoordMap.add ps Lambda rest
       | Beard _ -> CoordMap.add ps (Beard 0) rest
+      | Target n -> CoordMap.add ps (Target n) rest
+      | SysTrampoline s -> CoordMap.add ps (Trampoline (decode_trammap s trammap)) rest
       | Empty -> rest
       | SysRobot -> failwith "I certainly didn't expect Robot in response to load_char"
+      | Trampoline _ -> failwith "I certainly didn't expect an usual Trampoline in response to load_char"
     )
   in
   loop pos accum
@@ -139,17 +166,25 @@ let invert_y dimensions pos =
   let _, h = dimensions and x, y = pos in
   x, h - y + 1
 
+let make_trammap s =
+  let tramp_def, ss = String.split s " " in
+  let _, target = String.split ss " " in
+  tramp_def, (String.to_int target)
+
 let parse_metadata lines =
-  let rec loop water flooding waterproof growth razors = function
+
+
+  let rec loop water flooding waterproof growth razors trammap = function
   | l :: rest -> let k, v = String.split (String.strip l) " " in
-         if k = "Water"      then loop (String.to_int v)  flooding waterproof growth razors rest
-    else if k = "Flooding"   then loop water (String.to_int v)     waterproof growth razors rest
-    else if k = "Waterproof" then loop water flooding (String.to_int v)       growth razors rest
-    else if k = "Growth"     then loop water flooding waterproof (String.to_int v)   razors rest
-    else if k = "Razors"     then loop water flooding waterproof growth (String.to_int v)   rest
-    else ( log "Unknown metadata key %s" k; loop water flooding waterproof growth razors rest );
-  | _ -> water, flooding, waterproof, growth, razors
-  in loop 0 0 10 25 0 lines
+         if k = "Water"      then loop (String.to_int v)  flooding waterproof growth razors trammap rest
+    else if k = "Flooding"   then loop water (String.to_int v)     waterproof growth razors trammap rest
+    else if k = "Waterproof" then loop water flooding (String.to_int v)       growth razors trammap rest
+    else if k = "Growth"     then loop water flooding waterproof (String.to_int v)   razors trammap rest
+    else if k = "Razors"     then loop water flooding waterproof growth (String.to_int v)   trammap rest
+    else if k = "Trampoline" then loop water flooding waterproof growth razors  ((make_trammap v) :: trammap) rest
+    else ( log "Unknown metadata key %s" k; loop water flooding waterproof growth razors trammap rest );
+  | _ -> water, flooding, waterproof, growth, razors, trammap
+  in loop 0 0 10 25 0 [] lines
 
 let split_lines_to_field_and_metadata lines =
   let rec loop is_metadata field metadata = function
@@ -159,13 +194,13 @@ let split_lines_to_field_and_metadata lines =
   in loop false [] [] lines
 
 let load_field lines =
-  let rec loop pos = function
-    | line::rest -> load_line pos (rstrip line) ( loop (pos ^+ (0,1) ) rest )
+  let rec loop ~trammap pos = function
+    | line::rest -> load_line ~trammap:trammap pos (rstrip line) ( loop ~trammap:trammap (pos ^+ (0,1) ) rest )
     | _ -> CoordMap.empty
   in
   let l_field, l_meta = split_lines_to_field_and_metadata lines in
-  let loaded_field = loop (1, 1) l_field
-  and water, flooding, waterproof, growth, razors = parse_metadata l_meta in
+  let water, flooding, waterproof, growth, razors, trammap = parse_metadata l_meta in
+  let loaded_field = loop ~trammap:trammap (1, 1) l_field in
   let dimensions = get_dimensions loaded_field in
   { f = CoordMap.fold
       (fun coords elem new_map -> CoordMap.add (invert_y dimensions coords) elem new_map)
@@ -240,9 +275,12 @@ let rec is_walkable field c =
   | Lambda -> true
   | Empty -> true
   | Earth -> true
+  | Target _ -> false
+  | Trampoline _ -> true
   | Lift  -> field.lambdas = 0
   | Rock  -> true (* sic *)
   | SysRobot -> failwith "is_walkable got some SysRobot, that should not happen"
+  | SysTrampoline _ -> failwith "is_walkable got some SysRobot, that should not happen"
 
 
 let update_robot coords = function
@@ -260,6 +298,7 @@ exception Bork_finished
 exception Bork_drowned
 
 exception Finished of int
+exception CoordsFound of coords
 
 let exec_action field ?(allow_unwalkable=false) action =
 
@@ -276,27 +315,46 @@ let exec_action field ?(allow_unwalkable=false) action =
   | _ -> -1, 0
   in
 
+  let get_coords_of_target target map = (
+    try (
+      CoordMap.iter (fun k e -> match e with | Target t -> if t = target then raise (CoordsFound k) | _ -> ()) map;
+      failwithf "Target %d not found on map" target
+    ) with CoordsFound c -> c
+  ) in
+
+
+
+  let map_with_targets_removed target_to_remove map =
+    CoordMap.filter (fun k e -> match e with 
+    | Trampoline t | Target t -> t <> target_to_remove | _ -> true) map
+  in
+
   (* do robot action *)
   let do_robo_stuff map = match (peek_map map new_robo_coords) with
   | Wall -> raise Bork_unwalkable
   | Beard _ -> raise Bork_unwalkable
-  | Empty -> map
-  | Razor -> CoordMap.remove new_robo_coords map
-  | Earth -> CoordMap.remove new_robo_coords map
-  | Lambda -> CoordMap.remove new_robo_coords map
+  | Target _ -> raise Bork_unwalkable
+  | Trampoline t -> (
+    (get_coords_of_target t field.f), (map_with_targets_removed t field.f)
+  )
+  | Empty -> new_robo_coords, map
+  | Razor -> new_robo_coords, CoordMap.remove new_robo_coords map
+  | Earth -> new_robo_coords, CoordMap.remove new_robo_coords map
+  | Lambda -> new_robo_coords, CoordMap.remove new_robo_coords map
   | Lift -> if field.lambdas = 0 then raise (Finished (field.score + 25 * field.lambdas_eaten - 1)) else raise Bork_unwalkable
   | Rock ->
         let rock_moved_to = (if action = "L" then new_robo_coords ^+ (-1, 0) else if action = "R" then new_robo_coords ^+ (1, 0) else raise Bork_unwalkable) in
         if not & CoordMap.mem rock_moved_to map then (
-          CoordMap.add rock_moved_to Rock (CoordMap.remove new_robo_coords map)
+          new_robo_coords, CoordMap.add rock_moved_to Rock (CoordMap.remove new_robo_coords map)
         ) else (
           raise Bork_unwalkable
         )
   | SysRobot -> failwith "SysRobot in do_robo_stuff"
+  | SysTrampoline _ -> failwith "SysTrampoline in do_robo_stuff"
 
   in
 
-  let map_after_robot_movement = do_robo_stuff field.f in
+  let new_robo_coords, map_after_robot_movement = do_robo_stuff field.f in
   let peek = peek_map ~robot:new_robo_coords map_after_robot_movement in
 
   let rec transform_location coords loc map =
@@ -610,6 +668,9 @@ in
 
   let n = rstrip " ABC " in
   assert (n = " ABC");
+
+  let n = make_trammap "A targets 1" in
+  assert (n = ("A", 1));
 
   log "Tests passed"
 
