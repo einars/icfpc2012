@@ -1,0 +1,58 @@
+Raging Mushrooms Team
+---------------------
+
+  This year the team was one man army:
+
+  Einar Lielmanis <einar@spicausis.lv>
+
+
+This is a ICFP-2012 boulder-dash solution written in OCaml.
+
+The solver is a small heuristics-based solution searcher; for each location
+only the heurestest of the paths is retained and analyzed further in depth.
+
+The heuristic is a magic based on robots excitement of the path. Did it
+move a rock? Exciting! Dit it get a razor? Doubly so!
+
+While solver is unable to solve larger maps, but should cope with them fairly
+robustly, not eating too much memory, etc.
+
+
+Invocations
+-----------
+
+1. The official, contest invocation:
+
+  ./loader <some.map
+
+2a. Solve map and animate the solution:
+
+  ./loader some.map
+
+2b. Solve map and just display the solution and final state:
+
+  QUIET=1 ./loader some.map
+
+3a. Run some solution (e.g RLUDRLUD) on a map and display the progress:
+
+  ./loader some.map RLUDRLUD
+
+3b. Run some solution on a map and display the end state:
+
+  QUIET=1 ./loader some.map RLUDRLUD
+
+
+
+Compilation from source
+-----------------------
+
+To compile you will need:
+
+  ocaml ocaml-findlib ocaml-extlib
+
+For debian the packages are called:
+
+  ocaml-nox ocaml-findlib libextlib-ocaml-dev
+
+After that, "make" in src folder will build a nice solver.
+
