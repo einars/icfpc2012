@@ -735,8 +735,8 @@ let torture_chambers =
   ]
 
 let torture torture_fn =
-  let tortured_total, best_possible_total =
-  List.fold_left (fun  (tortured_total, best_possible_total) (map, best_possible_score) ->
+  let tortured_total, best_possible_total, normalized_total, n_tortures  =
+  List.fold_left (fun  (tortured_total, best_possible_total, normalized_total, n_tortures) (map, best_possible_score) ->
 
     let solved_score = (try
       let field = load_field & lines_of_file & map in
@@ -746,9 +746,9 @@ let torture torture_fn =
     ) in
 
     log "%s: %3d%% %4d of %4d" map (solved_score * 100 / best_possible_score) solved_score best_possible_score;
-    (tortured_total + solved_score, best_possible_total + best_possible_score)
-  ) (0,0) torture_chambers in
-  log "TOTAL: %4d of %d, %d%%" tortured_total best_possible_total (tortured_total * 100 / best_possible_total)
+    (tortured_total + solved_score, best_possible_total + best_possible_score, normalized_total + (solved_score * 100 / best_possible_score), n_tortures + 1)
+  ) (0,0,0,0) torture_chambers in
+  log "TOTAL: %4d of %d, %d%% , %d%% normalized" tortured_total best_possible_total (tortured_total * 100 / best_possible_total) (normalized_total / n_tortures)
 
 
 
