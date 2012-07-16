@@ -1,4 +1,25 @@
 (* vim: set tw=0 : *)
+(*
+  * ICFP-2012 robot solver by Raging Mushrooms Team
+  * Written by Einar Lielmanis
+  *
+  *
+  * Usage:
+  *
+  * Contest mode:
+  * ./loader <../maps/some.map
+  *
+  * Solve map and animate solution:
+  * ./loader ../maps/some.map
+  *
+  * Manual mode, animate given solution:
+  * ./loader ../maps/some.map UDUDULRLR
+  *
+  * To turn off animation, set QUIET environment variable,
+  * e.g QUIET=1 ./loader ../maps/some.map
+  *
+  *)
+
 open Printf
 open ExtLib
 
@@ -7,7 +28,6 @@ open ExtLib
 let ($) a b = b a
 let (&) a b = a b
 let (<<) a b c = a (b c)
-let (>>) a b c = b (a c)
 
 let default_logger msg = try printf "%s\n%!" msg with _ -> ()
 let log msg = kprintf default_logger msg
@@ -47,7 +67,7 @@ let make_2d_array n m init =
 
 (* }}} *)
 
-type elem = Wall | Rock | Grimrock | Lift | Earth | Empty | Lambda | Beard of int | Razor | Target of int | Trampoline of int | SysRobot | SysTrampoline of string
+type elem = Wall | Rock | Grimrock | Lift | Earth | Empty | Lambda | Beard of int | Razor | Target of int | Trampoline of int | Robot | SysTrampoline of string
 
 let initial_robot_coordinates = ref (0,0)
 
@@ -83,37 +103,37 @@ let rec count_lambdas f =
 
 (* {{{ load/print field *)
 let load_char = function
-  | '#' -> Wall, false
-  | '.' -> Earth, false
-  | ' ' -> Empty, false
-  | 'R' -> Empty, true
-  | 'L' -> Lift, false
-  | 'O' -> Lift, false
-  | '0' -> Lambda, false
-  | '*' -> Rock, false
-  | '\\'-> Lambda, false
-  | 'W'-> Beard 0, false
-  | '!'-> Razor, false
-  | 'A'-> SysTrampoline "A", false
-  | 'B'-> SysTrampoline "B", false
-  | 'C'-> SysTrampoline "C", false
-  | 'D'-> SysTrampoline "D", false
-  | 'E'-> SysTrampoline "E", false
-  | 'F'-> SysTrampoline "F", false
-  | 'G'-> SysTrampoline "G", false
-  | 'H'-> SysTrampoline "H", false
-  | 'I'-> SysTrampoline "I", false
-  | '1'-> Target 1, false
-  | '2'-> Target 2, false
-  | '3'-> Target 3, false
-  | '4'-> Target 4, false
-  | '5'-> Target 5, false
-  | '6'-> Target 6, false
-  | '7'-> Target 7, false
-  | '8'-> Target 8, false
-  | '9'-> Target 9, false
-  | '@' -> Grimrock, false
-  | c -> log "Unknown char %c, treating as a wall" c; Wall, false
+  | '#' -> Wall
+  | '.' -> Earth
+  | ' ' -> Empty
+  | 'R' -> Robot
+  | 'L' -> Lift
+  | 'O' -> Lift
+  | '0' -> Lambda
+  | '*' -> Rock
+  | '\\'-> Lambda
+  | 'W'-> Beard 0
+  | '!'-> Razor
+  | 'A'-> SysTrampoline "A"
+  | 'B'-> SysTrampoline "B"
+  | 'C'-> SysTrampoline "C"
+  | 'D'-> SysTrampoline "D"
+  | 'E'-> SysTrampoline "E"
+  | 'F'-> SysTrampoline "F"
+  | 'G'-> SysTrampoline "G"
+  | 'H'-> SysTrampoline "H"
+  | 'I'-> SysTrampoline "I"
+  | '1'-> Target 1
+  | '2'-> Target 2
+  | '3'-> Target 3
+  | '4'-> Target 4
+  | '5'-> Target 5
+  | '6'-> Target 6
+  | '7'-> Target 7
+  | '8'-> Target 8
+  | '9'-> Target 9
+  | '@' -> Grimrock
+  | c -> log "Unknown char %c, treating as a wall" c; Wall
 
 let char_of_elem ?(exit_open = false) = function
   | Wall -> "▓"
@@ -128,7 +148,7 @@ let char_of_elem ?(exit_open = false) = function
   | Target _ -> "t"
   | Trampoline _ -> "T"
   | SysTrampoline _ -> failwith "char_of_elem certainly didn't expect any SysTrampoline"
-  | SysRobot -> failwith "char_of_elem certainly didn't expect any Robot"
+  | Robot -> failwith "char_of_elem certainly didn't expect any Robot"
 
 let rec decode_trammap s = function
   | h::t -> if fst h = s then snd h else decode_trammap s t
@@ -139,10 +159,9 @@ let load_line ~trammap pos s accum =
     let index = (fst ps) - 1 in
     if String.length s <= index then inner_accum
     else (
-      let elem, robo = load_char & String.get s index
+      let elem = load_char & String.get s index
       and rest = loop (ps ^+ (1,0)) inner_accum in
 
-      if robo then initial_robot_coordinates := ps;
       match elem with
       | Wall -> CoordMap.add ps Wall rest
       | Razor -> CoordMap.add ps Razor rest
@@ -155,7 +174,7 @@ let load_line ~trammap pos s accum =
       | Grimrock -> CoordMap.add ps Grimrock rest
       | SysTrampoline s -> CoordMap.add ps (Trampoline (decode_trammap s trammap)) rest
       | Empty -> rest
-      | SysRobot -> failwith "I certainly didn't expect Robot in response to load_char"
+      | Robot -> initial_robot_coordinates := ps; rest
       | Trampoline _ -> failwith "I certainly didn't expect an usual Trampoline in response to load_char"
     )
   in
@@ -262,7 +281,7 @@ let print_field ?(clear=true) ?(heuristics=0) f =
 
 
 let peek_map ?(robot=(-1,-1)) f l =
-  if robot = l then SysRobot
+  if robot = l then Robot
   else try CoordMap.find l f with _ -> Empty
 
 let string_of_elem_at f l = peek_map f.f l $ char_of_elem
@@ -287,8 +306,8 @@ let is_blocked field c =
   | Lift  -> false
   | Rock  -> true
   | Grimrock  -> true
-  | SysRobot -> failwith "is_blocked got some SysRobot, that should not happen"
-  | SysTrampoline _ -> failwith "is_blocked got some SysRobot, that should not happen"
+  | Robot -> failwith "is_blocked got some Robot, that should not happen"
+  | SysTrampoline _ -> failwith "is_blocked got some Robot, that should not happen"
 
 
 let turns_grimrock_to_lambda map c =
@@ -304,8 +323,8 @@ let turns_grimrock_to_lambda map c =
   | Lift  -> true
   | Rock  -> true
   | Grimrock  -> true
-  | SysRobot -> failwith "turns_grimrock_to_lambda got some SysRobot, that should not happen"
-  | SysTrampoline _ -> failwith "turns_grimrock_to_lambda got some SysRobot, that should not happen"
+  | Robot -> failwith "turns_grimrock_to_lambda got some Robot, that should not happen"
+  | SysTrampoline _ -> failwith "turns_grimrock_to_lambda got some SysTrampoline, that should not happen"
 
 
 let update_robot coords = function
@@ -405,7 +424,7 @@ let exec_action field action =
         ) else (
           raise Bork_unwalkable
         )
-  | SysRobot -> failwith "SysRobot in do_robo_stuff"
+  | Robot -> failwith "Robot in do_robo_stuff"
   | SysTrampoline _ -> failwith "SysTrampoline in do_robo_stuff"
 
   in
