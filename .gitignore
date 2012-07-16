@@ -1,5 +1,7 @@
 *.cmi
 *.cmo
 ._d
+*.o
 loader/loader
+lifter/lifter
 
