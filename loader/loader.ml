@@ -493,11 +493,15 @@ let exec_action field action =
   in
 
 
+
+  let robo_y = snd new_robo_coords in
+  let cur_wetness = if robo_y <= field.water then field.cur_wetness + 1 else 0 in
+
   let cur_water = if field.cur_water + 1 >= field.flooding then 0 else field.cur_water + 1 in
   let water = if cur_water = 0 && field.flooding > 0 then field.water + 1 else field.water in
-  let robo_y = snd new_robo_coords in
-  let cur_wetness = if robo_y <= water then field.cur_wetness + 1 else 0 in
+
   if cur_wetness > field.waterproof then raise Bork_drowned;
+
 
   { field with
     f             = CoordMap.fold transform_location map_after_robot_movement map_after_robot_movement;
@@ -593,7 +597,7 @@ let apply_solution field some_moves =
 
 (* {{{ Coma solver *)
 
-type solver_record = Blank | JustSolution of string * int * int | History of field * int
+type solver_record = JustSolution of string * int * int | WholeField of field * int
 
 let coma = ref CoordMap.empty
 let coma_ongoing = ref true
@@ -604,30 +608,21 @@ let solve ?(quiet=false) ?(use_signals=true) f =
     try
       let morphed = do_action field action in
       let morphed_hscore = (heuristic_score morphed) in
+      let morphed_record = WholeField (morphed, morphed_hscore) in
       if not (CoordMap.mem morphed.robot map) then (
         coma_ongoing := true;
-        CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
+        CoordMap.add morphed.robot morphed_record map
       ) else match CoordMap.find morphed.robot map with
         | JustSolution (_, hscore, _) ->
           if hscore < morphed_hscore then (
             coma_ongoing := true;
-            CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
+            CoordMap.add morphed.robot morphed_record map
           ) else map
-        | History (nice_state, hscore) ->
-          (* overwriting a fresh, perfectly nice solution *)
+        | WholeField (nice_state, hscore) ->
             if hscore < morphed_hscore then (
-              (*
-              log "--------------------------------------------------";
-              log "**** OVERWRITE h=%d" hscore;
-              print_field ~heuristics:hscore ~clear:false nice_state;
-              log "**** With %d" morphed_hscore;
-              print_field ~heuristics:morphed_hscore ~clear:false morphed;
-              *)
-              CoordMap.add morphed.robot (History (morphed, morphed_hscore)) map
+              coma_ongoing := true;
+              CoordMap.add morphed.robot morphed_record map
             ) else map
-      | Blank ->
-          coma_ongoing := true;
-          CoordMap.add morphed.robot (History (morphed, (heuristic_score morphed))) map
     with _ -> map
   )
 
@@ -638,21 +633,21 @@ let solve ?(quiet=false) ?(use_signals=true) f =
   let process_coma coords slv new_coma =
     match slv with
     | JustSolution _ -> new_coma
-    | Blank -> new_coma
-    | History (old_field, old_score) -> (
+    | WholeField (old_field, old_hscore) -> (
         let m = new_coma in
         let m = induce_coma m old_field "D" in
         let m = induce_coma m old_field "L" in
         let m = induce_coma m old_field "U" in
         let m = induce_coma m old_field "R" in
         let m = if old_field.razors > 0 then induce_coma m old_field "S" else m in
-        begin match CoordMap.find coords m with
-        | Blank -> m
-        | JustSolution (_, score_check, _)
-        | History (_, score_check) ->
-            if score_check = old_score
-            then CoordMap.add coords (JustSolution (old_field.moves_taken, (heuristic_score old_field), old_field.score)) m
-            else m
+        begin
+          (* field has processed, the solution hasn't changed: put it into the history *)
+          match CoordMap.find coords m with
+          | JustSolution (_, score_check, _)
+          | WholeField (_, score_check) ->
+              if score_check = old_hscore
+              then CoordMap.add coords (JustSolution (old_field.moves_taken, old_hscore, old_field.score)) m
+              else m
         end
     )
   in
@@ -662,7 +657,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
     and top_solution = ref "A" in
       CoordMap.iter (fun coords elem ->
           match elem with
-          | History (current_best, hscore) ->
+          | WholeField (current_best, hscore) ->
               if current_best.score > !top_score then (
                 top_solution := current_best.moves_taken;
                 top_score := current_best.score;
@@ -674,7 +669,6 @@ let solve ?(quiet=false) ?(use_signals=true) f =
                 top_score := score;
                 top_hscore := hscore;
               )
-          | Blank -> ()
       ) !coma;
 
     (* log "Retrieved %s as best (score=%d, hscore=%d)" !top_solution !top_score !top_hscore; *)
@@ -690,7 +684,7 @@ let solve ?(quiet=false) ?(use_signals=true) f =
       exit 0;
   ));
 
-  coma := CoordMap.add f.robot (History (f, heuristic_score f)) CoordMap.empty;
+  coma := CoordMap.add f.robot (WholeField (f, heuristic_score f)) CoordMap.empty;
 
   coma_ongoing := true;
   while !coma_ongoing do
