@@ -223,6 +223,7 @@ let load_field lines =
   let water, flooding, waterproof, growth, razors, trammap = parse_metadata l_meta in
   let loaded_field = loop ~trammap:trammap (1, 1) l_field in
   let dimensions = get_dimensions loaded_field in
+
   { f = CoordMap.fold
       (fun coords elem new_map -> CoordMap.add (invert_y dimensions coords) elem new_map)
       loaded_field
@@ -283,11 +284,6 @@ let print_field ?(clear=true) ?(heuristics=0) f =
 let peek_map ?(robot=(-1,-1)) f l =
   if robot = l then Robot
   else try CoordMap.find l f with _ -> Empty
-
-let string_of_elem_at f l = peek_map f.f l $ char_of_elem
-
-
-let rec is_empty field c = peek_map field.f c = Empty
 
 let is_blocked field c =
   let cx, cy = c
@@ -371,10 +367,10 @@ let exec_action field action =
   in
 
   let get_coords_of_target target map = (
-    try (
+    try
       CoordMap.iter (fun k e -> match e with | Target t -> if t = target then raise (CoordsFound k) | _ -> ()) map;
       failwithf "Target %d not found on map" target
-    ) with CoordsFound c -> c
+    with CoordsFound c -> c
   ) in
 
 
@@ -395,7 +391,7 @@ let exec_action field action =
   in
 
   (* do robot action *)
-  let do_robo_stuff map = match (peek_map map new_robo_coords) with
+  let do_robo_stuff map = match peek_map map new_robo_coords with
   | Wall -> raise Bork_unwalkable
   | Beard _ -> raise Bork_unwalkable
   | Target _ -> raise Bork_unwalkable
@@ -442,7 +438,7 @@ let exec_action field action =
       and c_bottom_right = coords ^+ (+1, -1) in
       let p_bottom = peek c_bottom in
       if p_bottom = Empty then (
-        (* akmens krīt lejā vertikāli *)
+        (* stone falling down *)
         if new_robo_coords = coords ^+ (+0, -2) then raise Bork_fallen_rock;
         if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (+0, -2)) then
           CoordMap.add c_bottom Lambda (CoordMap.remove coords map)
@@ -450,20 +446,21 @@ let exec_action field action =
           CoordMap.add c_bottom loc (CoordMap.remove coords map);
       ) else
       if (p_bottom = Rock || p_bottom = Grimrock) && peek c_right = Empty && peek c_bottom_right = Empty then (
-          (* uz leju pa labi *)
+          (* down right, rock on rock *)
           if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
           if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (+1, -2))
             then CoordMap.add c_bottom_right Lambda (CoordMap.remove coords map)
             else CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
       ) else
       if p_bottom = Lambda && peek c_right = Empty && peek c_bottom_right = Empty then (
-          (* uz leju pa labi *)
+          (* down right, rock on lambda *)
           if new_robo_coords = coords ^+ (+1, -2) then raise Bork_fallen_rock;
           if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (+1, -2))
             then CoordMap.add c_bottom_right Lambda (CoordMap.remove coords map)
             else CoordMap.add c_bottom_right loc (CoordMap.remove coords map)
       ) else
       if (p_bottom = Rock || p_bottom = Grimrock) && (peek c_left = Empty && peek c_bottom_left = Empty) && (peek c_right <> Empty || peek c_bottom_right <> Empty) then (
+        (* down left *)
         if new_robo_coords = coords ^+ (-1, -2) then raise Bork_fallen_rock;
         if loc = Grimrock && turns_grimrock_to_lambda map (coords ^+ (-1, -2))
           then CoordMap.add c_bottom_left Lambda (CoordMap.remove coords map)
@@ -496,8 +493,6 @@ let exec_action field action =
   in
 
 
-  let nf = CoordMap.fold transform_location map_after_robot_movement map_after_robot_movement in
-
   let cur_water = if field.cur_water + 1 >= field.flooding then 0 else field.cur_water + 1 in
   let water = if cur_water = 0 && field.flooding > 0 then field.water + 1 else field.water in
   let robo_y = snd new_robo_coords in
@@ -505,17 +500,17 @@ let exec_action field action =
   if cur_wetness > field.waterproof then raise Bork_drowned;
 
   { field with
-    f = nf;
-    score = field.score + score_diff;
-    moves_taken = field.moves_taken ^ action;
+    f             = CoordMap.fold transform_location map_after_robot_movement map_after_robot_movement;
+    robot         = new_robo_coords;
+    score         = field.score + score_diff;
+    moves_taken   = field.moves_taken ^ action;
     lambdas_eaten = field.lambdas_eaten + lambda_diff;
-    robot = new_robo_coords;
 
-    cur_water = cur_water;
+    cur_water   = cur_water;
     cur_wetness = cur_wetness;
-    water = water;
+    water       = water;
+    razors      = new_razors;
 
-    razors = new_razors;
     path_excitement = field.path_excitement + excitement_score;
   }
 
@@ -552,14 +547,7 @@ let lift_coords f =
   CoordMap.iter (fun c e -> if e = Lift then coords := c) f.f;
   !coords
 
-let rockability_score f =
-  let score = ref 0
-  and height = snd f.dimensions in
-  CoordMap.iter (fun (rock_x, rock_y) e -> if e = Rock then score := !score + rock_x + rock_y * height / 2) f.f;
-  !score
-
 let heuristic_score f =
-  (* - (rockability_score f) / 4 *)
   let lift = lift_coords f in
   let lift_is_stoned =
     (is_blocked f (lift ^+ (1,0))) &&
@@ -572,7 +560,7 @@ let heuristic_score f =
   + if lift_is_stoned then (-9000) else 0
   + (if f.is_complete then 10000000 else 0)
   + (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then 1000000 else 0)
-  - 50 * (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then manhattan_distance lift f.robot else 0)
+  - 5 * (if f.total_lambdas = f.lambdas_eaten && (not lift_is_stoned) then manhattan_distance lift f.robot else 0)
   - (n_beards f) * 5
   (*
   - 50 * (if f.total_lambdas = f.lambdas_eaten then manhattan_distance (lift_coords f) f.robot else 0)
@@ -589,14 +577,14 @@ let heuristic_score f =
 
 (* {{{ animate_solution *)
 let animate_solution field winning_moves =
-  let exploded_moves = String.explode winning_moves $ List.map String.of_char $ List.rev in
-  List.fold_right
-      (fun action field ->
+  ignore & String.explode winning_moves $ List.map String.of_char $
+  List.fold_left
+      (fun field action ->
         let nf = do_action field action in
         ignore(Unix.select [] [] [] 0.05);
         print_field ~heuristics:(heuristic_score nf) nf;
         nf
-      ) exploded_moves field $ ignore
+      ) field
 
 let apply_solution field some_moves =
   List.fold_left do_action field & String.explode some_moves $ List.map String.of_char
